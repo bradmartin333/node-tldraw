@@ -14,3 +14,7 @@ open http://localhost:3000
 
 - boards are saved in the local `data/` folder
 - if you need custom host/CORS settings, copy `.env.example` to `.env.local` and edit it
+
+## licensing
+
+- the tldraw SDK remains under its [original license](https://tldraw.dev/community/license), and production use requires an appropriate tldraw trial, commercial, or hobby license

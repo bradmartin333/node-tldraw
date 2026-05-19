@@ -510,6 +510,8 @@ export default function App() {
                         <span
                           className="board-name"
                           onClick={(event) => {
+                            if (board.id !== activeBoard.id) return
+
                             event.stopPropagation()
                             startRenamingBoard(board)
                           }}
