@@ -10,6 +10,56 @@
   --ink-soft: #566275;
   --accent: #0f766e;
   --accent-soft: #d9f2ef;
+  --pane-bg: rgba(255, 255, 255, 0.85);
+  --pane-border: #dfe5eb;
+  --header-bg: rgba(255, 255, 255, 0.8);
+  --icon-btn-bg: #fff;
+  --icon-btn-border: #d3dce6;
+  --secondary-btn-bg: #fff;
+  --secondary-btn-border: #d7dde5;
+  --secondary-btn-color: #283548;
+  --board-hover-bg: #eef2f5;
+  --board-active-bg: #e8ecef;
+  --board-action-bg: rgba(255, 255, 255, 0.9);
+  --board-action-border: #d6dee8;
+  --board-action-color: #3e4c60;
+  --board-name-input-bg: #fff;
+  --board-name-input-border: #b7c3d2;
+  --canvas-bg: #fff;
+  --status-bg: rgba(255, 255, 255, 0.96);
+  --status-border: #c9d6e5;
+  --status-color: #1e2a3b;
+  --wordmark-color: #2c2d30;
+}
+
+[data-theme='dark'] {
+  --bg: #1a1b1e;
+  --pane: #25262b;
+  --panel-border: #373a40;
+  --ink: #e8eaed;
+  --ink-soft: #909aab;
+  --accent: #2dd4bf;
+  --accent-soft: #0d3531;
+  --pane-bg: rgba(30, 31, 36, 0.92);
+  --pane-border: #2e3038;
+  --header-bg: rgba(26, 27, 30, 0.9);
+  --icon-btn-bg: #2c2d33;
+  --icon-btn-border: #404450;
+  --secondary-btn-bg: #2c2d33;
+  --secondary-btn-border: #404450;
+  --secondary-btn-color: #c9ccd4;
+  --board-hover-bg: #2a2b31;
+  --board-active-bg: #303238;
+  --board-action-bg: rgba(40, 42, 50, 0.9);
+  --board-action-border: #404450;
+  --board-action-color: #a0aabc;
+  --board-name-input-bg: #2c2d33;
+  --board-name-input-border: #505565;
+  --canvas-bg: #1a1b1e;
+  --status-bg: rgba(30, 31, 36, 0.96);
+  --status-border: #404450;
+  --status-color: #c9ccd4;
+  --wordmark-color: #e8eaed;
 }
 
 html,
@@ -23,6 +73,11 @@ body,
 
 body {
   color: var(--ink);
+  background: var(--bg);
+  transition: background 200ms ease, color 200ms ease;
+}
+
+[data-theme='light'] body {
   background:
     radial-gradient(circle at 15% 10%, #f8fffe 0, #edf7f5 25%, transparent 45%),
     radial-gradient(circle at 100% 100%, #fff4ef 0, #ffe9df 20%, transparent 40%),
@@ -45,8 +100,8 @@ body {
 .board-pane {
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.85);
-  border-right: 1px solid #dfe5eb;
+  background: var(--pane-bg);
+  border-right: 1px solid var(--pane-border);
   overflow: hidden;
 }
 
@@ -88,7 +143,7 @@ body {
 .brand-wordmark {
   font-size: 0.98rem;
   font-weight: 700;
-  color: #2c2d30;
+  color: var(--wordmark-color);
 }
 
 .brand-controls {
@@ -116,14 +171,21 @@ body {
 }
 
 .icon-btn {
-  border: 1px solid #d3dce6;
-  background: #fff;
+  border: 1px solid var(--icon-btn-border);
+  background: var(--icon-btn-bg);
   color: var(--ink);
   border-radius: 12px;
   cursor: pointer;
   width: 34px;
   height: 34px;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.theme-toggle-btn {
+  padding: 0;
 }
 
 .app-shell.is-collapsed .icon-btn {
@@ -165,9 +227,9 @@ body {
 }
 
 .secondary-btn {
-  border: 1px solid #d7dde5;
-  background: #fff;
-  color: #283548;
+  border: 1px solid var(--secondary-btn-border);
+  background: var(--secondary-btn-bg);
+  color: var(--secondary-btn-color);
   border-radius: 10px;
   font: inherit;
   font-weight: 600;
@@ -198,11 +260,11 @@ body {
 }
 
 .board-row:hover {
-  background: #eef2f5;
+  background: var(--board-hover-bg);
 }
 
 .board-row.is-active {
-  background: #e8ecef;
+  background: var(--board-active-bg);
 }
 
 .board-open {
@@ -220,9 +282,9 @@ body {
 }
 
 .board-delete {
-  border: 1px solid #d6dee8;
-  background: rgba(255, 255, 255, 0.9);
-  color: #3e4c60;
+  border: 1px solid var(--board-action-border);
+  background: var(--board-action-bg);
+  color: var(--board-action-color);
   border-radius: 8px;
   width: 24px;
   height: 24px;
@@ -245,9 +307,9 @@ body {
 .board-download {
   display: grid;
   place-items: center;
-  border: 1px solid #d6dee8;
-  background: rgba(255, 255, 255, 0.9);
-  color: #3e4c60;
+  border: 1px solid var(--board-action-border);
+  background: var(--board-action-bg);
+  color: var(--board-action-color);
   border-radius: 8px;
   width: 24px;
   height: 24px;
@@ -280,13 +342,13 @@ body {
 
 .board-name-input {
   width: 100%;
-  border: 1px solid #b7c3d2;
+  border: 1px solid var(--board-name-input-border);
   border-radius: 8px;
   padding: 4px 8px;
   font: inherit;
   font-weight: 600;
   color: inherit;
-  background: #fff;
+  background: var(--board-name-input-bg);
   box-sizing: border-box;
 }
 
@@ -315,9 +377,15 @@ body {
   justify-content: space-between;
   align-items: baseline;
   gap: 10px;
-  border-bottom: 1px solid #dfe5eb;
-  background: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid var(--pane-border);
+  background: var(--header-bg);
   padding: 10px 14px;
+}
+
+.canvas-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .canvas-header h2 {
@@ -340,7 +408,16 @@ body {
   min-height: 0;
   border: 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--canvas-bg);
+}
+
+.canvas-editor-shell {
+  position: absolute;
+  inset: 0;
+}
+
+.canvas-editor-shell.is-preparing {
+  visibility: hidden;
 }
 
 /* Apply app font to tldraw UI chrome. */
@@ -386,9 +463,9 @@ body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 2;
-  border: 1px solid #c9d6e5;
-  background: rgba(255, 255, 255, 0.96);
-  color: #1e2a3b;
+  border: 1px solid var(--status-border);
+  background: var(--status-bg);
+  color: var(--status-color);
   border-radius: 10px;
   padding: 8px 12px;
   font-size: 0.85rem;
@@ -411,6 +488,18 @@ body {
   .board-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 880px) {
+  .canvas-header {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .canvas-controls {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 
