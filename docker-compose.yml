@@ -2,6 +2,7 @@ services:
   tldraw:
     build: .
     container_name: tldraw_app
+    restart: always
     depends_on:
       - sync
     env_file:
@@ -16,6 +17,7 @@ services:
   sync:
     build: .
     container_name: tldraw_sync
+    restart: always
     command: npm run sync-server
     env_file:
       - .env.local
