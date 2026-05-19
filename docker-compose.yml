@@ -1,0 +1,27 @@
+services:
+  tldraw:
+    build: .
+    container_name: tldraw_app
+    depends_on:
+      - sync
+    env_file:
+      - .env.local
+    environment:
+      - VITE_SYNC_HTTP_URL=${VITE_SYNC_HTTP_URL:-}
+      - VITE_SYNC_WS_URL=${VITE_SYNC_WS_URL:-}
+      - VITE_SYNC_WRITE_TOKEN=${SYNC_WRITE_TOKEN:-}
+    ports:
+      - "3000:3000"
+
+  sync:
+    build: .
+    container_name: tldraw_sync
+    command: npm run sync-server
+    env_file:
+      - .env.local
+    environment:
+      - SYNC_WRITE_TOKEN=${SYNC_WRITE_TOKEN:-}
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data
