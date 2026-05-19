@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Tldraw, parseTldrawJsonFile, serializeTldrawJson } from 'tldraw'
 import { useSync } from '@tldraw/sync'
 import 'tldraw/tldraw.css'
@@ -121,10 +121,26 @@ export default function App() {
   const [isRenamingBoard, setIsRenamingBoard] = useState(false)
   const [isPaneCollapsed, setIsPaneCollapsed] = useState(false)
   const [isTldrDragActive, setIsTldrDragActive] = useState(false)
+  const [isBoardPreparing, setIsBoardPreparing] = useState(true)
   const [editor, setEditor] = useState(null)
   const [boardsError, setBoardsError] = useState('')
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const stored = localStorage.getItem('tldraw-color-scheme')
+    if (stored === 'dark') return true
+    return false
+  })
   const fileInputRef = useRef(null)
   const skipNextUrlSyncRef = useRef(false)
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light')
+    localStorage.setItem('tldraw-color-scheme', isDarkMode ? 'dark' : 'light')
+  }, [isDarkMode])
+
+  useEffect(() => {
+    if (!editor) return
+    editor.user.updateUserPreferences({ colorScheme: isDarkMode ? 'dark' : 'light' })
+  }, [editor, isDarkMode])
 
   const activeBoard = useMemo(
     () => boards.find((board) => board.id === activeBoardId) ?? boards[0] ?? DEFAULT_BOARD,
@@ -208,6 +224,69 @@ export default function App() {
   }, [activeBoard.roomId])
 
   const syncedStore = useSync({ uri: syncUri })
+
+  const fitBoardToUsedArea = useCallback(
+    ({ preferSelection = false, animate = true, editorInstance } = {}) => {
+      const targetEditor = editorInstance ?? editor
+      if (!targetEditor) return
+
+      const cameraOptions = animate
+        ? {
+          animation: {
+            duration: 220,
+          },
+        }
+        : {
+          animation: {
+            duration: 0,
+          },
+        }
+
+      const selectedShapeIds = Array.from(targetEditor.getSelectedShapeIds?.() ?? [])
+
+      if (preferSelection && selectedShapeIds.length > 0) {
+        targetEditor.zoomToSelection?.(cameraOptions)
+        return
+      }
+
+      const usedShapeIds = Array.from(targetEditor.getCurrentPageShapeIds?.() ?? [])
+      if (usedShapeIds.length === 0) return
+
+      targetEditor.zoomToFit?.(cameraOptions)
+    },
+    [editor],
+  )
+
+  useEffect(() => {
+    setIsBoardPreparing(true)
+  }, [activeBoard.roomId])
+
+  const handleEditorMount = useCallback(
+    (nextEditor) => {
+      setEditor(nextEditor)
+      fitBoardToUsedArea({ preferSelection: false, animate: false, editorInstance: nextEditor })
+
+      window.requestAnimationFrame(() => {
+        setIsBoardPreparing(false)
+      })
+    },
+    [fitBoardToUsedArea],
+  )
+
+  useEffect(() => {
+    if (syncedStore.status !== 'synced-remote') {
+      setIsBoardPreparing(true)
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setIsBoardPreparing(false)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [syncedStore.status])
 
   const handleCreateBoard = () => {
     const name = window.prompt('Board name')
@@ -565,6 +644,35 @@ export default function App() {
             <h2>{activeBoard.name}</h2>
             <p>{formatRelativeTime(activeBoard.updatedAt)}</p>
           </div>
+          <div className="canvas-controls">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => fitBoardToUsedArea({ preferSelection: true })}
+              disabled={!editor}
+              title="Fit selection or used area"
+            >
+              Zoom To Fit
+            </button>
+            <button
+              type="button"
+              className="icon-btn theme-toggle-btn"
+              onClick={() => setIsDarkMode((prev) => !prev)}
+              aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {isDarkMode ? (
+                <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16">
+                  <circle cx="8" cy="8" r="3" fill="currentColor" />
+                  <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16">
+                  <path d="M13.5 9.5A5.5 5.5 0 016.5 2.5a5.5 5.5 0 100 11 5.5 5.5 0 007-4z" fill="currentColor" />
+                </svg>
+              )}
+            </button>
+          </div>
         </header>
 
         <section
@@ -580,7 +688,9 @@ export default function App() {
             <div className="status-card error">Sync error: {syncedStore.error.message}</div>
           ) : null}
           {syncedStore.status === 'synced-remote' ? (
-            <Tldraw key={activeBoard.roomId} store={syncedStore.store} onMount={setEditor} />
+            <div className={`canvas-editor-shell ${isBoardPreparing ? 'is-preparing' : ''}`}>
+              <Tldraw key={activeBoard.roomId} store={syncedStore.store} onMount={handleEditorMount} />
+            </div>
           ) : null}
           {isTldrDragActive ? <div className="drop-overlay">Drop .tldr file to import</div> : null}
         </section>
