@@ -19,15 +19,6 @@ const slugify = (value) =>
 
 const toSafeFileName = (value) => slugify(value) || 'board'
 
-const getBoardInitials = (value) => {
-  const parts = value.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('')
-}
-
 const formatRelativeTime = (updatedAt) => {
   const deltaMs = Date.now() - updatedAt
   const minutes = Math.round(deltaMs / 60000)
@@ -125,6 +116,9 @@ function formatImportError(error) {
 export default function App() {
   const [boards, setBoards] = useState([])
   const [activeBoardId, setActiveBoardId] = useState(null)
+  const [editingBoardId, setEditingBoardId] = useState(null)
+  const [editingBoardName, setEditingBoardName] = useState('')
+  const [isRenamingBoard, setIsRenamingBoard] = useState(false)
   const [isPaneCollapsed, setIsPaneCollapsed] = useState(false)
   const [isTldrDragActive, setIsTldrDragActive] = useState(false)
   const [editor, setEditor] = useState(null)
@@ -263,6 +257,60 @@ export default function App() {
       })
       .catch((error) => {
         window.alert(error.message)
+      })
+  }
+
+  const startRenamingBoard = (board) => {
+    setActiveBoardId(board.id)
+    setEditingBoardId(board.id)
+    setEditingBoardName(board.name)
+  }
+
+  const cancelRenamingBoard = () => {
+    setEditingBoardId(null)
+    setEditingBoardName('')
+  }
+
+  const submitRenamingBoard = (board) => {
+    if (isRenamingBoard) return
+
+    const nextName = editingBoardName.trim()
+
+    if (!nextName) {
+      window.alert('Board name cannot be empty')
+      return
+    }
+
+    if (nextName === board.name) {
+      cancelRenamingBoard()
+      return
+    }
+
+    setIsRenamingBoard(true)
+
+    fetch(`${toSyncApiBase()}/api/boards/${board.id}`, {
+      method: 'PATCH',
+      headers: withAuthHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ name: nextName }),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Failed to rename board')
+        return response.json()
+      })
+      .then((updatedBoard) => {
+        setBoards((prev) =>
+          prev.map((item) => {
+            if (item.id !== updatedBoard.id) return item
+            return updatedBoard
+          }),
+        )
+        cancelRenamingBoard()
+      })
+      .catch((error) => {
+        window.alert(error.message)
+      })
+      .finally(() => {
+        setIsRenamingBoard(false)
       })
   }
 
@@ -415,20 +463,63 @@ export default function App() {
             <nav className="board-list" aria-label="Boards">
               {boards.map((board) => (
                 <div key={board.id} className={`board-row ${board.id === activeBoard.id ? 'is-active' : ''}`}>
-                  <button
-                    type="button"
+                  <div
                     className="board-open"
                     onClick={() => setActiveBoardId(board.id)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return
+
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setActiveBoardId(board.id)
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                     title={board.name}
                   >
-                    <span className="board-badge" aria-hidden="true">
-                      {getBoardInitials(board.name)}
-                    </span>
                     <span>
-                      <span className="board-name">{board.name}</span>
+                      {editingBoardId === board.id ? (
+                        <input
+                          type="text"
+                          className="board-name-input"
+                          value={editingBoardName}
+                          onChange={(event) => setEditingBoardName(event.target.value)}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => {
+                            event.stopPropagation()
+
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              submitRenamingBoard(board)
+                            }
+
+                            if (event.key === 'Escape') {
+                              event.preventDefault()
+                              cancelRenamingBoard()
+                            }
+                          }}
+                          onBlur={() => {
+                            if (!isRenamingBoard) {
+                              submitRenamingBoard(board)
+                            }
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          className="board-name"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            startRenamingBoard(board)
+                          }}
+                        >
+                          {board.name}
+                        </span>
+                      )}
                       <span className="board-meta">{formatRelativeTime(board.updatedAt)}</span>
                     </span>
-                  </button>
+                  </div>
                   <div className="board-actions">
                     {board.id === activeBoard.id ? (
                       <button

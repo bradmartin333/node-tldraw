@@ -207,7 +207,7 @@ body {
 
 .board-open {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   align-items: center;
   border: 0;
@@ -265,22 +265,26 @@ body {
   opacity: 1;
 }
 
-.board-badge {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  background: #167d77;
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
 .board-name {
   display: block;
   font-weight: 600;
+}
+
+.board-name-input {
+  width: 100%;
+  border: 1px solid #b7c3d2;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.board-name-input:focus {
+  outline: 2px solid rgba(15, 118, 110, 0.25);
+  border-color: #2e8f87;
 }
 
 .board-meta {

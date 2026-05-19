@@ -73,7 +73,7 @@ function maybeSeedBoards() {
 function jsonHeaders(origin) {
   const headers = {
     'content-type': 'application/json',
-    'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
     'access-control-allow-headers': 'content-type,authorization',
     vary: 'Origin',
   }
@@ -248,6 +248,60 @@ const server = http.createServer((req, res) => {
             updatedAt,
           }),
         )
+      })
+      .catch((error) => {
+        res.writeHead(400, jsonHeaders(origin))
+        res.end(JSON.stringify({ error: error.message }))
+      })
+    return
+  }
+
+  if (req.method === 'PATCH' && url.pathname.startsWith('/api/boards/')) {
+    if (!isAllowedOrigin(origin)) {
+      res.writeHead(403, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
+      return
+    }
+
+    if (!hasWriteAccess(req)) {
+      res.writeHead(401, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+      return
+    }
+
+    const boardId = decodeURIComponent(url.pathname.replace('/api/boards/', ''))
+    if (!isValidBoardId(boardId)) {
+      res.writeHead(400, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Invalid board id' }))
+      return
+    }
+
+    readJsonBody(req)
+      .then((body) => {
+        const name = String(body.name || '').trim()
+        if (!name) {
+          res.writeHead(400, jsonHeaders(origin))
+          res.end(JSON.stringify({ error: 'Name is required' }))
+          return
+        }
+
+        const updatedAt = Date.now()
+        const result = db
+          .prepare('UPDATE boards SET name = ?, updated_at = ? WHERE id = ?')
+          .run(name, updatedAt, boardId)
+
+        if (result.changes === 0) {
+          res.writeHead(404, jsonHeaders(origin))
+          res.end(JSON.stringify({ error: 'Board not found' }))
+          return
+        }
+
+        const updated = db
+          .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
+          .get(boardId)
+
+        res.writeHead(200, jsonHeaders(origin))
+        res.end(JSON.stringify(serializeBoard(updated)))
       })
       .catch((error) => {
         res.writeHead(400, jsonHeaders(origin))
