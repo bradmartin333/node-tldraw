@@ -13,6 +13,8 @@ services:
       - VITE_SYNC_WRITE_TOKEN=${SYNC_WRITE_TOKEN:-}
     ports:
       - "3000:3000"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
   sync:
     build: .
@@ -27,3 +29,5 @@ services:
       - "8787:8787"
     volumes:
       - ./data:/data
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
