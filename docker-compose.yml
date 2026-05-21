@@ -33,7 +33,7 @@ services:
     ports:
       - "8787:8787"
     volumes:
-      - ./data:/data
+      - tldraw_sync_data:/data
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:
@@ -42,3 +42,7 @@ services:
           memory: 128M
         limits:
           memory: 256M
+
+volumes:
+  tldraw_sync_data:
+    name: tldraw_sync_data
