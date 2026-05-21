@@ -512,10 +512,6 @@ export default function App() {
         {!isPaneCollapsed ? (
           <>
             <div className="pane-actions">
-              <div className="pane-heading">
-                <p className="brand-kicker">Today</p>
-                <h1 className="brand-title">Boards</h1>
-              </div>
               <div className="pane-action-row">
                 <input
                   ref={fileInputRef}

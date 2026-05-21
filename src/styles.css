@@ -151,25 +151,6 @@ body {
   align-items: center;
 }
 
-.brand-kicker {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.brand-title {
-  margin: 2px 0 0;
-  font-size: 1.2rem;
-  font-weight: 700;
-}
-
-.pane-heading {
-  margin-bottom: 10px;
-}
-
 .icon-btn {
   border: 1px solid var(--icon-btn-border);
   background: var(--icon-btn-bg);
@@ -386,6 +367,22 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  --control-btn-height: 38px;
+}
+
+.canvas-controls .secondary-btn {
+  height: var(--control-btn-height);
+  padding-top: 0;
+  padding-bottom: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.canvas-controls .theme-toggle-btn {
+  height: var(--control-btn-height);
+  width: auto;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
 }
 
 .canvas-header h2 {
