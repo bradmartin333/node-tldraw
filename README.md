@@ -17,7 +17,7 @@ open http://localhost:3000
 
 ## migrate existing data (one-time)
 
-If your boards currently live in a bind-mounted folder (for example `/opt/stacks/tldraw/data` from Dockge), copy them once into the shared Docker volume:
+if your boards currently live in a bind-mounted folder (for example `/opt/stacks/tldraw/data` from Dockge), copy them once into the shared Docker volume
 
 ```bash
 docker volume create tldraw_sync_data
@@ -27,7 +27,7 @@ docker run --rm \
 	alpine sh -c 'cp -av /from/. /to/'
 ```
 
-Then redeploy the stack.
+then, redeploy the stack
 
 ## licensing
 
