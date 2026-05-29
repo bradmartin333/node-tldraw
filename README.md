@@ -12,7 +12,7 @@ open http://localhost:3000
 
 ## notes
 
-- if you need custom host/CORS settings, copy `.env.example` to `.env.local` and edit it
+- if you need custom host/CORS settings, copy `.env.example` to `.env` and edit it
 - boards are saved in the Docker volume `tldraw_sync_data` (shared across CLI/Dockge as long as they use the same Docker engine)
 
 ## migrate existing data (one-time)

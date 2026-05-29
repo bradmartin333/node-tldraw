@@ -6,13 +6,13 @@ services:
     depends_on:
       - sync
     env_file:
-      - .env.local
+      - .env
     environment:
       - VITE_SYNC_HTTP_URL=${VITE_SYNC_HTTP_URL:-}
       - VITE_SYNC_WS_URL=${VITE_SYNC_WS_URL:-}
       - VITE_SYNC_WRITE_TOKEN=${SYNC_WRITE_TOKEN:-}
     ports:
-      - "3000:3000"
+      - 3000:3000
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:
@@ -27,11 +27,11 @@ services:
     restart: always
     command: npm run sync-server
     env_file:
-      - .env.local
+      - .env
     environment:
       - SYNC_WRITE_TOKEN=${SYNC_WRITE_TOKEN:-}
     ports:
-      - "8787:8787"
+      - 8787:8787
     volumes:
       - tldraw_sync_data:/data
     labels:
@@ -42,7 +42,7 @@ services:
           memory: 128M
         limits:
           memory: 256M
-
 volumes:
   tldraw_sync_data:
     name: tldraw_sync_data
+networks: {}
