@@ -39,4 +39,5 @@ services:
 volumes:
   tldraw_sync_data:
     name: tldraw_sync_data
+    external: true
 networks: {}

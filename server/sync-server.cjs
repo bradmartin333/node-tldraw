@@ -310,6 +310,46 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  if (req.method === 'POST' && url.pathname.startsWith('/api/boards/') && url.pathname.endsWith('/touch')) {
+    if (!isAllowedOrigin(origin)) {
+      res.writeHead(403, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
+      return
+    }
+
+    if (!hasWriteAccess(req)) {
+      res.writeHead(401, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+      return
+    }
+
+    const boardId = decodeURIComponent(url.pathname.replace('/api/boards/', '').replace('/touch', ''))
+    if (!isValidBoardId(boardId)) {
+      res.writeHead(400, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Invalid board id' }))
+      return
+    }
+
+    const updatedAt = Date.now()
+    const result = db
+      .prepare('UPDATE boards SET updated_at = ? WHERE id = ?')
+      .run(updatedAt, boardId)
+
+    if (result.changes === 0) {
+      res.writeHead(404, jsonHeaders(origin))
+      res.end(JSON.stringify({ error: 'Board not found' }))
+      return
+    }
+
+    const updated = db
+      .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
+      .get(boardId)
+
+    res.writeHead(200, jsonHeaders(origin))
+    res.end(JSON.stringify(serializeBoard(updated)))
+    return
+  }
+
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/boards/')) {
     if (!isAllowedOrigin(origin)) {
       res.writeHead(403, jsonHeaders(origin))
