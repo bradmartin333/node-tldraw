@@ -35,10 +35,8 @@ const BOARD_QUERY_PARAM = 'board'
 const BOARDS_REFRESH_INTERVAL_MS = 15000
 const RELATIVE_TIME_REFRESH_INTERVAL_MS = 30000
 const BOARD_TOUCH_THROTTLE_MS = 5000
-const LOGO_LIGHT_URL =
-  import.meta.env.VITE_BRAND_LOGO_LIGHT_URL?.trim() || 'http://devtools.ad.aed.pro:8080/assets/logo.png'
-const LOGO_DARK_URL =
-  import.meta.env.VITE_BRAND_LOGO_DARK_URL?.trim() || 'http://devtools.ad.aed.pro:8080/assets/logo-dark.png'
+const LOGO_LIGHT_URL = '/assets/light.webp'
+const LOGO_DARK_URL = '/assets/dark.webp'
 const BRAND_LOGO_WIDTH_PX = 200
 
 const getBoardIdFromUrl = () => {
