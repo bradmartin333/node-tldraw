@@ -5,6 +5,7 @@ a ready to go tldraw container and webpage
 ## usage
 
 ```bash
+docker volume create tldraw_sync_data
 docker compose up -d --build
 ```
 
