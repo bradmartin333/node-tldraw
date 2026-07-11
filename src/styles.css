@@ -703,7 +703,7 @@ body {
 
 /* Code surface + syntax tokens. Deliberately neutral rather than tinted with
    --accent, so code reads as code and not as a highlighted callout. */
-:root {
+.md-shape {
   --code-bg: #f6f8fa;
   --code-border: #d8dee4;
   --code-label: #57606a;
