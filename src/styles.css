@@ -722,7 +722,7 @@ body {
   --hl-deletion-bg: #ffebe9;
 }
 
-[data-theme='dark'] {
+[data-theme='dark'] .md-shape {
   --code-bg: #16181d;
   --code-border: #2d323b;
   --code-label: #8b949e;
