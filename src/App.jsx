@@ -1,7 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Tldraw, parseTldrawJsonFile, serializeTldrawJson } from 'tldraw'
+import {
+  Tldraw,
+  defaultBindingUtils,
+  defaultShapeUtils,
+  parseTldrawJsonFile,
+  serializeTldrawJson,
+} from 'tldraw'
 import { useSync } from '@tldraw/sync'
 import 'tldraw/tldraw.css'
+import {
+  MarkdownShapeTool,
+  MarkdownShapeUtil,
+  markdownAssetUrls,
+  markdownComponents,
+  markdownUiOverrides,
+} from './MarkdownShape.jsx'
+
+// <Tldraw> merges these with its defaults, so it takes the custom utils only.
+const customShapeUtils = [MarkdownShapeUtil]
+const customTools = [MarkdownShapeTool]
+
+// useSync does NOT merge: it builds the store schema from exactly what it is
+// given. It must receive the defaults alongside the custom utils, or the
+// built-in shapes drop out of the schema and their migrations break.
+const syncShapeUtils = [...defaultShapeUtils, MarkdownShapeUtil]
 
 const DEFAULT_BOARD = {
   id: 'b-default',
@@ -35,10 +57,8 @@ const BOARD_QUERY_PARAM = 'board'
 const BOARDS_REFRESH_INTERVAL_MS = 15000
 const RELATIVE_TIME_REFRESH_INTERVAL_MS = 30000
 const BOARD_TOUCH_THROTTLE_MS = 5000
-const LOGO_LIGHT_URL =
-  import.meta.env.VITE_BRAND_LOGO_LIGHT_URL?.trim() || 'http://devtools.ad.aed.pro:8080/assets/logo.png'
-const LOGO_DARK_URL =
-  import.meta.env.VITE_BRAND_LOGO_DARK_URL?.trim() || 'http://devtools.ad.aed.pro:8080/assets/logo-dark.png'
+const LOGO_LIGHT_URL = '/assets/light.webp'
+const LOGO_DARK_URL = '/assets/dark.webp'
 const BRAND_LOGO_WIDTH_PX = 200
 
 const getBoardIdFromUrl = () => {
@@ -324,7 +344,11 @@ export default function App() {
     return `${toSyncSocketBase()}/sync/${activeBoard.roomId}`
   }, [activeBoard.roomId])
 
-  const syncedStore = useSync({ uri: syncUri })
+  const syncedStore = useSync({
+    uri: syncUri,
+    shapeUtils: syncShapeUtils,
+    bindingUtils: defaultBindingUtils,
+  })
 
   const fitBoardToUsedArea = useCallback(
     ({ preferSelection = false, animate = true, editorInstance } = {}) => {
@@ -859,7 +883,16 @@ export default function App() {
           ) : null}
           {syncedStore.status === 'synced-remote' ? (
             <div className={`canvas-editor-shell ${isBoardPreparing ? 'is-preparing' : ''}`}>
-              <Tldraw key={activeBoard.roomId} store={syncedStore.store} onMount={handleEditorMount} />
+              <Tldraw
+                key={activeBoard.roomId}
+                store={syncedStore.store}
+                onMount={handleEditorMount}
+                shapeUtils={customShapeUtils}
+                tools={customTools}
+                overrides={markdownUiOverrides}
+                components={markdownComponents}
+                assetUrls={markdownAssetUrls}
+              />
             </div>
           ) : null}
           {isTldrDragActive ? <div className="drop-overlay">Drop .tldr file to import</div> : null}

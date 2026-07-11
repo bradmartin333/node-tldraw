@@ -1,10 +1,15 @@
-const http = require('http')
-const path = require('path')
-const fs = require('fs')
-const { randomUUID } = require('crypto')
-const { DatabaseSync } = require('node:sqlite')
-const { WebSocketServer } = require('ws')
-const { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } = require('@tldraw/sync-core')
+// ESM throughout: mixing require() and import() of the tldraw packages loads
+// @tldraw/store, /validate and /tlschema twice (once CJS, once ESM), which
+// tldraw reports as duplicate library instances and which breaks validation.
+import http from 'node:http'
+import path from 'node:path'
+import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
+import { WebSocketServer } from 'ws'
+import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import { createTLSchema, defaultShapeSchemas } from '@tldraw/tlschema'
+import { MARKDOWN_SHAPE_TYPE, markdownShapeProps } from '../shared/markdownShape.js'
 
 const HOST = '0.0.0.0'
 const PORT = Number(process.env.SYNC_PORT || 8787)
@@ -31,6 +36,16 @@ if (!fs.existsSync(DB_DIR)) {
 
 const db = new DatabaseSync(DB_PATH)
 const rooms = new Map()
+
+// TLSocketRoom validates every incoming record. Without a schema it falls back
+// to the stock tldraw schema, which has no 'markdown' shape and rejects it with
+// INVALID_RECORD. Built from the same props the client uses.
+const tlSchema = createTLSchema({
+  shapes: {
+    ...defaultShapeSchemas,
+    [MARKDOWN_SHAPE_TYPE]: { props: markdownShapeProps },
+  },
+})
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS boards (
@@ -149,7 +164,7 @@ function loadOrMakeRoom(roomId) {
   const sql = new NodeSqliteWrapper(db, { tablePrefix: roomPrefix(roomId) })
   const storage = new SQLiteSyncStorage({ sql })
 
-  const room = new TLSocketRoom({ storage })
+  const room = new TLSocketRoom({ storage, schema: tlSchema })
   rooms.set(roomId, room)
   return room
 }
