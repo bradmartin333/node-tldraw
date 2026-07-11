@@ -179,6 +179,7 @@ export function parseBlocks(markdown) {
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
+      !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim()) &&
       !isHeading(lines[i]) &&
       !isFence(lines[i]) &&
       !isQuote(lines[i]) &&
