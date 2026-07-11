@@ -27,7 +27,11 @@ const INLINE_RULES = [
  * than a link, so `javascript:` and friends can never reach an href.
  */
 export function sanitizeUrl(url) {
-  const trimmed = url.trim()
+  const trimmed = String(url ?? '').trim()
+
+  // Browsers ignore ASCII control chars / whitespace in hrefs, which can be used
+  // to smuggle `javascript:` past a naive prefix check (e.g. `java\nscript:`).
+  if (!trimmed || /[\u0000-\u001F\u007F\s]/.test(trimmed)) return null
 
   // Protocol-relative `//host` looks relative but resolves off-origin, so it
   // has to be rejected before the relative-path check below.
