@@ -595,3 +595,295 @@ body {
     align-items: flex-start;
   }
 }
+
+/* Markdown shape widget --------------------------------------------------- */
+.md-shape {
+  box-sizing: border-box;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--canvas-bg);
+  color: var(--ink);
+  overflow: hidden;
+  font-family: var(--app-font-sans);
+}
+
+.md-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+}
+
+.md-editor {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--app-font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.md-render {
+  font-size: 14px;
+  line-height: 1.55;
+  word-wrap: break-word;
+}
+
+.md-render > :first-child {
+  margin-top: 0;
+}
+
+.md-render > :last-child {
+  margin-bottom: 0;
+}
+
+.md-render h1,
+.md-render h2,
+.md-render h3,
+.md-render h4,
+.md-render h5,
+.md-render h6 {
+  margin: 0.6em 0 0.3em;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.md-render h1 {
+  font-size: 1.5em;
+}
+
+.md-render h2 {
+  font-size: 1.3em;
+}
+
+.md-render h3 {
+  font-size: 1.12em;
+}
+
+.md-render p {
+  margin: 0.4em 0;
+}
+
+.md-render ul,
+.md-render ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+
+.md-render li {
+  margin: 0.15em 0;
+}
+
+.md-render a {
+  color: var(--accent);
+  text-decoration: underline;
+  pointer-events: all;
+}
+
+.md-render blockquote {
+  margin: 0.5em 0;
+  padding: 0.1em 0.9em;
+  border-left: 3px solid var(--panel-border);
+  color: var(--ink-soft);
+}
+
+.md-render hr {
+  border: none;
+  border-top: 1px solid var(--panel-border);
+  margin: 0.8em 0;
+}
+
+/* Code surface + syntax tokens. Deliberately neutral rather than tinted with
+   --accent, so code reads as code and not as a highlighted callout. */
+:root {
+  --code-bg: #f6f8fa;
+  --code-border: #d8dee4;
+  --code-label: #57606a;
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-title: #8250df;
+  --hl-type: #953800;
+  --hl-attr: #0550ae;
+  --hl-tag: #116329;
+  --hl-meta: #6e7781;
+  --hl-addition-fg: #116329;
+  --hl-addition-bg: #dafbe1;
+  --hl-deletion-fg: #82071e;
+  --hl-deletion-bg: #ffebe9;
+}
+
+[data-theme='dark'] {
+  --code-bg: #16181d;
+  --code-border: #2d323b;
+  --code-label: #8b949e;
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-number: #79c0ff;
+  --hl-title: #d2a8ff;
+  --hl-type: #ffa657;
+  --hl-attr: #79c0ff;
+  --hl-tag: #7ee787;
+  --hl-meta: #8b949e;
+  --hl-addition-fg: #aff5b4;
+  --hl-addition-bg: #033a16;
+  --hl-deletion-fg: #ffdcd7;
+  --hl-deletion-bg: #67060c;
+}
+
+.md-inline-code {
+  font-family: var(--app-font-mono);
+  font-size: 0.88em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  color: var(--ink);
+}
+
+.md-code-block {
+  margin: 0.6em 0;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+
+.md-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.md-code-block code {
+  font-family: var(--app-font-mono);
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--ink);
+}
+
+/* A header row, not an overlay: floating the label over the block would sit on
+   top of the tail of a long first line. */
+.md-code-head {
+  display: flex;
+  justify-content: flex-end;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--code-border);
+}
+
+.md-code-lang {
+  color: var(--code-label);
+  font-family: var(--app-font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* Fence tag we have no grammar for — don't imply we highlighted it. */
+.md-code-lang.is-unknown {
+  opacity: 0.55;
+  font-weight: 500;
+}
+
+/* highlight.js token classes, emitted by lowlight. */
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-literal,
+.hljs-symbol,
+.hljs-selector-tag,
+.hljs-doctag {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-bullet {
+  color: var(--hl-string);
+}
+
+.hljs-number {
+  color: var(--hl-number);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-params {
+  color: var(--hl-attr);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--hl-title);
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-class {
+  color: var(--hl-type);
+}
+
+.hljs-name,
+.hljs-tag {
+  color: var(--hl-tag);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-comment .hljs-doctag {
+  color: var(--hl-meta);
+}
+
+.hljs-addition {
+  color: var(--hl-addition-fg);
+  background: var(--hl-addition-bg);
+}
+
+.hljs-deletion {
+  color: var(--hl-deletion-fg);
+  background: var(--hl-deletion-bg);
+}
+
+/* `${...}` inside a template literal: nested in the string span, so it needs to
+   be reset or the interpolated expression inherits the string colour. */
+.hljs-subst {
+  color: var(--ink);
+}
+
+.hljs-punctuation {
+  color: var(--ink-soft);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
