@@ -1,6 +1,6 @@
 {
-  "name": "tldraw-app",
-  "version": "1.0.0",
+  "name": "node-tldraw",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
