@@ -1,0 +1,19 @@
+# Standalone deployment — pulls the published image. No repo clone, no build.
+#
+#   curl -O https://raw.githubusercontent.com/bradmartin333/node-tldraw/main/deploy/docker-compose.yml
+#   docker compose up -d
+#
+# then open http://localhost:3000
+services:
+  tldraw:
+    image: bradmartin333/node-tldraw:latest
+    container_name: tldraw
+    restart: always
+    ports:
+      - 3000:3000
+      - 8787:8787
+    volumes:
+      - tldraw_sync_data:/data
+
+volumes:
+  tldraw_sync_data:

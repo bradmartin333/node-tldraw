@@ -6,7 +6,8 @@ services:
     depends_on:
       - sync
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - 3000:3000
     labels:
@@ -23,7 +24,8 @@ services:
     restart: always
     command: npm run sync-server
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - 8787:8787
     volumes:
@@ -39,5 +41,4 @@ services:
 volumes:
   tldraw_sync_data:
     name: tldraw_sync_data
-    external: true
 networks: {}

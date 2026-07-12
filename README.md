@@ -2,20 +2,45 @@
 
 a ready to go tldraw container and webpage
 
-## usage
+## run it
 
 ```bash
-docker volume create tldraw_sync_data
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/bradmartin333/node-tldraw/main/deploy/docker-compose.yml
+docker compose up -d
 ```
 
-open http://localhost:3000
+open <http://localhost:3000>
 
-## notes
+no env vars, no build, no manual volume setup. to update: `docker compose pull && docker compose up -d`.
 
-- if you need custom host/CORS settings, copy `.env.example` to `.env` and edit it
-- boards are saved in the Docker volume `tldraw_sync_data` (shared across CLI/Dockge as long as they use the same Docker engine)
+> **don't use docker desktop's *Run* dialog.** it leaves the port fields blank,
+> so nothing is published to the host and the page never loads — and it attaches
+> a throwaway volume, so boards vanish when the container is removed. use the
+> compose file above; docker desktop will show it under **Containers** with
+> start/stop/logs buttons.
+
+the equivalent `docker run`, if you prefer it:
+
+```bash
+docker run -d --name tldraw --restart always \
+  -p 3000:3000 -p 8787:8787 \
+  -v tldraw_sync_data:/data \
+  bradmartin333/node-tldraw:latest
+```
+
+**both ports are required.** 3000 serves the web app; 8787 serves the sync API and
+websocket, which the browser connects to directly. publish only 3000 and the page
+loads but no boards appear.
+
+boards persist in the `tldraw_sync_data` volume. `docker compose down` keeps it;
+only `docker compose down -v` deletes it.
+
+## develop
+
+```bash
+docker compose up -d --build   # builds from source, app + sync as separate containers
+```
 
 ## licensing
 
-- the tldraw SDK remains under its [original license](https://tldraw.dev/community/license), and production use requires an appropriate tldraw trial, commercial, or hobby license
+the tldraw SDK remains under its [original license](https://tldraw.dev/community/license), and production use requires an appropriate tldraw trial, commercial, or hobby license
