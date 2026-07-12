@@ -6,12 +6,15 @@ a ready to go tldraw container and webpage
 
 ```bash
 curl -O https://raw.githubusercontent.com/bradmartin333/node-tldraw/main/deploy/docker-compose.yml
+
 docker compose up -d
 ```
 
 open <http://localhost:3000>
 
-no env vars, no build, no manual volume setup. to update: `docker compose pull && docker compose up -d`.
+no build, no manual volume setup, and no env vars *if you stay on localhost*. reaching
+it by hostname or LAN IP needs two vars — see [reaching it from another host](#reaching-it-from-another-host).
+to update: `docker compose pull && docker compose up -d`.
 
 > **don't use docker desktop's *Run* dialog.** it leaves the port fields blank,
 > so nothing is published to the host and the page never loads — and it attaches
@@ -34,6 +37,19 @@ loads but no boards appear.
 
 boards persist in the `tldraw_sync_data` volume. `docker compose down` keeps it;
 only `docker compose down -v` deletes it.
+
+## custom logos
+
+swap in your own logos — no rebuild needed.
+
+**1. create both files first.** they must exist *before* `docker compose up`, or the
+mount fails:
+
+```sh
+cd /path/to/your/compose/dir # for Dockge, this is /opt/stacks/node-tldraw/
+cp /path/to/light-logo.webp ./logo-light.webp
+cp /path/to/dark-logo.webp  ./logo-dark.webp
+```
 
 ## develop
 
