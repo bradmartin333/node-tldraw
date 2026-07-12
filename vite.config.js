@@ -9,14 +9,23 @@ export default defineConfig(({ mode }) => {
     env.VITE_ALLOWED_HOSTS ||
     env.VITE_ALLOWED_HOST ||
     ''
-  const allowedHosts = Array.from(
-    new Set(
-      rawAllowedHosts
-        .split(',')
-        .map((host) => host.trim())
-        .filter(Boolean),
-    ),
+  // Vite matches this against the bare Host header, so an entry like
+  // "http://localhost:3000" never matches and yields a confusing 403. Strip any
+  // protocol and port so a URL-shaped value still does the right thing.
+  const toHostname = (value) =>
+    value
+      .trim()
+      .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+      .replace(/\/.*$/, '')
+      .replace(/:\d+$/, '')
+
+  const hosts = Array.from(
+    new Set(rawAllowedHosts.split(',').map(toHostname).filter(Boolean)),
   )
+
+  // "*" disables the host check entirely (Vite's `true`), which is what a
+  // container published on an arbitrary hostname or LAN IP needs.
+  const allowedHosts = hosts.includes('*') ? true : hosts
 
   return {
     plugins: [react()],

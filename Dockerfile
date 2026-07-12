@@ -7,9 +7,6 @@ RUN npm ci
 
 FROM deps AS build
 COPY . .
-# Gate the image on the unit tests: the published image (see
-# .github/workflows/docker-publish.yml) is built from this stage, so a failing
-# test fails the build rather than shipping.
 RUN npm test
 RUN npm run build
 
@@ -23,7 +20,11 @@ COPY --from=build /app/vite.config.js ./vite.config.js
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared
 COPY --from=build /app/dist ./dist
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
-EXPOSE 3000
+VOLUME ["/data"]
 
-CMD ["npm", "run", "preview"]
+EXPOSE 3000 8787
+
+CMD ["./docker-entrypoint.sh"]

@@ -1,3 +1,6 @@
 node_modules/
 dist/
 data/
+
+# Optional local overrides (e.g. SYNC_WRITE_TOKEN) — never commit secrets.
+.env
