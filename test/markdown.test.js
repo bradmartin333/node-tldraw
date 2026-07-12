@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { parseBlocks, sanitizeUrl, tokenizeInline } from '../src/markdown.js'
-import { getLanguageLabel, highlightCode } from '../src/highlight.js'
+import {
+  getLanguageLabel,
+  highlightCode,
+  isHighlighterLoaded,
+  loadHighlighter,
+} from '../src/highlight.js'
 
 // -- sanitizeUrl -------------------------------------------------------------
 
@@ -106,6 +111,23 @@ test('parseBlocks tolerates empty and nullish input', () => {
 })
 
 // -- highlighting ------------------------------------------------------------
+
+// Captured before the await below: test() callbacks only run after the module
+// has fully loaded, by which point the highlighter is ready.
+const loadedBeforeAwait = isHighlighterLoaded()
+const resultBeforeAwait = highlightCode('.a {}', 'css')
+
+// Grammars are behind a dynamic import in the app; load them for the tests below.
+await loadHighlighter()
+
+test('highlightCode degrades to plain text before the grammars load', () => {
+  assert.equal(loadedBeforeAwait, false)
+  assert.deepEqual(resultBeforeAwait, { nodes: null, isHighlighted: false })
+})
+
+test('loadHighlighter reports ready once resolved', () => {
+  assert.equal(isHighlighterLoaded(), true)
+})
 
 test('getLanguageLabel does not resolve Object.prototype members', () => {
   // A plain object literal would return Object.prototype / a function here, and

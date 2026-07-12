@@ -4,61 +4,28 @@
 // returns an HTML string, which would force dangerouslySetInnerHTML — lowlight
 // exposes the same grammars as a tree instead.)
 //
+// The grammars themselves live in ./highlightLanguages.js behind a dynamic
+// import: they are the heaviest part of the app bundle by far, and most boards
+// never render a code block. Callers kick off loadHighlighter() and re-render
+// when it resolves; until then highlightCode degrades to un-highlighted code.
+//
 // No JSX here, so this module is directly unit-testable under node --test.
 
-import { createLowlight } from 'lowlight'
-import bash from 'highlight.js/lib/languages/bash'
-import c from 'highlight.js/lib/languages/c'
-import cpp from 'highlight.js/lib/languages/cpp'
-import csharp from 'highlight.js/lib/languages/csharp'
-import css from 'highlight.js/lib/languages/css'
-import diff from 'highlight.js/lib/languages/diff'
-import dockerfile from 'highlight.js/lib/languages/dockerfile'
-import go from 'highlight.js/lib/languages/go'
-import ini from 'highlight.js/lib/languages/ini'
-import java from 'highlight.js/lib/languages/java'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import markdown from 'highlight.js/lib/languages/markdown'
-import php from 'highlight.js/lib/languages/php'
-import python from 'highlight.js/lib/languages/python'
-import ruby from 'highlight.js/lib/languages/ruby'
-import rust from 'highlight.js/lib/languages/rust'
-import scss from 'highlight.js/lib/languages/scss'
-import shell from 'highlight.js/lib/languages/shell'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
+let lowlight = null
+let loadPromise = null
 
-// Grammars are registered individually rather than via lowlight/common to keep
-// them out of the bundle unless listed. Each grammar brings its own aliases
-// (js, ts, py, sh, yml, html...), so those resolve without being named here.
-const lowlight = createLowlight({
-  bash,
-  c,
-  cpp,
-  csharp,
-  css,
-  diff,
-  dockerfile,
-  go,
-  ini,
-  java,
-  javascript,
-  json,
-  markdown,
-  php,
-  python,
-  ruby,
-  rust,
-  scss,
-  shell,
-  sql,
-  typescript,
-  xml,
-  yaml,
-})
+/** Load lowlight + all grammars. Idempotent; resolves once they're ready. */
+export function loadHighlighter() {
+  loadPromise ??= import('./highlightLanguages.js').then((mod) => {
+    lowlight = mod.lowlight
+    return lowlight
+  })
+  return loadPromise
+}
+
+export function isHighlighterLoaded() {
+  return lowlight !== null
+}
 
 // Null-prototype: a plain object literal would resolve fence tags that collide
 // with Object.prototype members — ```__proto__ would return Object.prototype and
@@ -108,12 +75,13 @@ export function getLanguageLabel(language) {
  * Highlight `code` as `language`.
  *
  * Returns `{ nodes, isHighlighted }`. `nodes` is a lowlight/hast token tree when
- * the grammar is known, or `null` when it isn't — callers render the raw code in
- * that case. Returning the flag alongside the tree means callers don't have to
- * ask whether the language is supported as a second, separate lookup.
+ * the grammar is known AND the highlighter has finished loading, or `null`
+ * otherwise — callers render the raw code in that case. Returning the flag
+ * alongside the tree means callers don't have to ask whether the language is
+ * supported as a second, separate lookup.
  */
 export function highlightCode(code, language) {
-  if (!language || !lowlight.registered(language)) {
+  if (!lowlight || !language || !lowlight.registered(language)) {
     return { nodes: null, isHighlighted: false }
   }
 

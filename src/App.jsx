@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Tldraw,
+  createTLStore,
   defaultBindingUtils,
   defaultShapeUtils,
   parseTldrawJsonFile,
@@ -25,11 +26,15 @@ const customTools = [MarkdownShapeTool]
 // built-in shapes drop out of the schema and their migrations break.
 const syncShapeUtils = [...defaultShapeUtils, MarkdownShapeUtil]
 
-const DEFAULT_BOARD = {
-  id: 'b-default',
-  name: 'Board',
-  roomId: 'room-default',
-  updatedAt: Date.now(),
+// Imports are parsed against this schema when no editor is mounted (e.g. from
+// the empty state). Same utils as the synced store, so results are identical.
+let fallbackImportSchema = null
+const getImportSchema = () => {
+  fallbackImportSchema ??= createTLStore({
+    shapeUtils: syncShapeUtils,
+    bindingUtils: defaultBindingUtils,
+  }).schema
+  return fallbackImportSchema
 }
 
 const slugify = (value) =>
@@ -57,6 +62,7 @@ const BOARD_QUERY_PARAM = 'board'
 const BOARDS_REFRESH_INTERVAL_MS = 15000
 const RELATIVE_TIME_REFRESH_INTERVAL_MS = 30000
 const BOARD_TOUCH_THROTTLE_MS = 5000
+const NOTICE_DISMISS_MS = 6000
 const LOGO_LIGHT_URL = '/assets/light.webp'
 const LOGO_DARK_URL = '/assets/dark.webp'
 const BRAND_LOGO_WIDTH_PX = 200
@@ -98,30 +104,12 @@ const setBoardIdInUrl = (boardId, { replace = false } = {}) => {
   window.history.pushState(null, '', nextUrl)
 }
 
-const trimTrailingSlash = (value) => value.replace(/\/+$/, '')
-
-const toSyncApiBase = () => {
-  const configured = import.meta.env.VITE_SYNC_HTTP_URL?.trim()
-  if (configured) return trimTrailingSlash(configured)
-
-  const protocol = window.location.protocol
-  const host = window.location.hostname
-  return `${protocol}//${host}:8787`
-}
-
-const toSyncSocketBase = () => {
-  const configured = import.meta.env.VITE_SYNC_WS_URL?.trim()
-  if (configured) return trimTrailingSlash(configured)
-
+// The sync server serves the app itself, so both the API and the websocket are
+// same-origin — no configured hosts, no CORS. In dev, vite proxies these paths
+// to the standalone sync server (see vite.config.js).
+const toSyncSocketUri = (roomId) => {
   const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const host = window.location.hostname
-  return `${wsProtocol}://${host}:8787`
-}
-
-const withAuthHeaders = (headers = {}) => {
-  const token = import.meta.env.VITE_SYNC_WRITE_TOKEN?.trim()
-  if (!token) return headers
-  return { ...headers, authorization: `Bearer ${token}` }
+  return `${wsProtocol}://${window.location.host}/sync/${roomId}`
 }
 
 function formatImportError(error) {
@@ -141,6 +129,76 @@ function formatImportError(error) {
   }
 }
 
+// The synced store, its loading states and the activity "touch" all live here
+// so that App can render an empty state when no boards exist — useSync must
+// always be called by whichever component owns it, so it owns a mounted board.
+// Keyed by roomId in App, so all of this state resets naturally per board.
+function BoardCanvas({ board, editor, onEditorMount, touchBoard }) {
+  const [isPreparing, setIsPreparing] = useState(true)
+  const lastTouchedAtRef = useRef(0)
+
+  const syncedStore = useSync({
+    uri: toSyncSocketUri(board.roomId),
+    shapeUtils: syncShapeUtils,
+    bindingUtils: defaultBindingUtils,
+  })
+
+  useEffect(() => {
+    if (syncedStore.status !== 'synced-remote') {
+      setIsPreparing(true)
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setIsPreparing(false)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [syncedStore.status])
+
+  useEffect(() => {
+    if (!editor || syncedStore.status !== 'synced-remote') return undefined
+
+    const unsubscribe = editor.store.listen(() => {
+      const now = Date.now()
+      if (now - lastTouchedAtRef.current < BOARD_TOUCH_THROTTLE_MS) return
+
+      lastTouchedAtRef.current = now
+      touchBoard(board.id)
+    }, { source: 'user', scope: 'document' })
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe()
+      }
+    }
+  }, [board.id, editor, syncedStore.status, touchBoard])
+
+  if (syncedStore.status === 'loading') {
+    return <div className="status-card">Connecting to sync server...</div>
+  }
+
+  if (syncedStore.status === 'error') {
+    return <div className="status-card error">Sync error: {syncedStore.error.message}</div>
+  }
+
+  return (
+    <div className={`canvas-editor-shell ${isPreparing ? 'is-preparing' : ''}`}>
+      <Tldraw
+        store={syncedStore.store}
+        onMount={onEditorMount}
+        shapeUtils={customShapeUtils}
+        tools={customTools}
+        overrides={markdownUiOverrides}
+        components={markdownComponents}
+        assetUrls={markdownAssetUrls}
+      />
+    </div>
+  )
+}
+
 export default function App() {
   const [boards, setBoards] = useState([])
   const [activeBoardId, setActiveBoardId] = useState(null)
@@ -149,12 +207,15 @@ export default function App() {
   const [isRenamingBoard, setIsRenamingBoard] = useState(false)
   const [isPaneCollapsed, setIsPaneCollapsed] = useState(false)
   const [isTldrDragActive, setIsTldrDragActive] = useState(false)
-  const [isBoardPreparing, setIsBoardPreparing] = useState(true)
   const [editor, setEditor] = useState(null)
   const [boardsError, setBoardsError] = useState('')
   const [boardSearchQuery, setBoardSearchQuery] = useState('')
   const [isNewBoardMenuOpen, setIsNewBoardMenuOpen] = useState(false)
   const [newBoardMenuPosition, setNewBoardMenuPosition] = useState({ x: 0, y: 0 })
+  const [isCreatingBoard, setIsCreatingBoard] = useState(false)
+  const [newBoardName, setNewBoardName] = useState('')
+  const [pendingDeleteBoardId, setPendingDeleteBoardId] = useState(null)
+  const [notice, setNotice] = useState('')
   const [, setRelativeTimeNow] = useState(Date.now())
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const stored = localStorage.getItem('tldraw-color-scheme')
@@ -165,7 +226,22 @@ export default function App() {
   const newBoardButtonRef = useRef(null)
   const newBoardMenuRef = useRef(null)
   const skipNextUrlSyncRef = useRef(false)
-  const boardTouchThrottleRef = useRef({ boardId: null, lastTouchedAt: 0 })
+  const noticeTimeoutRef = useRef(null)
+
+  const showNotice = useCallback((message) => {
+    setNotice(message)
+    if (noticeTimeoutRef.current) window.clearTimeout(noticeTimeoutRef.current)
+    noticeTimeoutRef.current = window.setTimeout(() => {
+      setNotice('')
+      noticeTimeoutRef.current = null
+    }, NOTICE_DISMISS_MS)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimeoutRef.current) window.clearTimeout(noticeTimeoutRef.current)
+    }
+  }, [])
 
   const sortedBoards = useMemo(() => {
     return [...boards].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -188,12 +264,22 @@ export default function App() {
   }, [editor, isDarkMode])
 
   const activeBoard = useMemo(
-    () => boards.find((board) => board.id === activeBoardId) ?? sortedBoards[0] ?? DEFAULT_BOARD,
+    () => boards.find((board) => board.id === activeBoardId) ?? sortedBoards[0] ?? null,
     [activeBoardId, boards, sortedBoards],
   )
 
+  const pendingDeleteBoard = useMemo(
+    () => boards.find((board) => board.id === pendingDeleteBoardId) ?? null,
+    [boards, pendingDeleteBoardId],
+  )
+
+  // A stale editor from an unmounted board must not receive commands.
+  useEffect(() => {
+    if (!activeBoard) setEditor(null)
+  }, [activeBoard])
+
   const loadBoards = useCallback(({ preserveActiveSelection = true, clearErrors = false } = {}) => {
-    return fetch(`${toSyncApiBase()}/api/boards`)
+    return fetch('/api/boards')
       .then(async (response) => {
         if (!response.ok) throw new Error('Failed to load boards')
         return response.json()
@@ -217,6 +303,8 @@ export default function App() {
           const sorted = [...result].sort((a, b) => b.updatedAt - a.updatedAt)
           return sorted[0]?.id ?? null
         })
+
+        return result
       })
   }, [])
 
@@ -224,8 +312,12 @@ export default function App() {
     let isMounted = true
 
     loadBoards({ preserveActiveSelection: false, clearErrors: true })
-      .then(() => {
+      .then((result) => {
         if (!isMounted) return
+        const boardIdFromUrl = getBoardIdFromUrl()
+        if (boardIdFromUrl && !result.some((board) => board.id === boardIdFromUrl)) {
+          showNotice('Board not found — it may have been deleted. Showing the most recent board.')
+        }
       })
       .catch((error) => {
         if (!isMounted) return
@@ -235,7 +327,7 @@ export default function App() {
     return () => {
       isMounted = false
     }
-  }, [loadBoards])
+  }, [loadBoards, showNotice])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -260,7 +352,12 @@ export default function App() {
   }, [loadBoards])
 
   useEffect(() => {
-    if (boards.length === 0) return
+    if (boards.length === 0) {
+      // With no boards there is no board URL to reflect; go back to the root
+      // so a later create doesn't leave a stale /boards/<id> path behind.
+      if (getBoardIdFromUrl()) setBoardIdInUrl(null, { replace: true })
+      return
+    }
 
     const nextBoardId = boards.some((board) => board.id === activeBoardId)
       ? activeBoardId
@@ -324,6 +421,19 @@ export default function App() {
     }
   }, [isNewBoardMenuOpen])
 
+  useEffect(() => {
+    if (!pendingDeleteBoardId) return undefined
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setPendingDeleteBoardId(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [pendingDeleteBoardId])
+
   const openNewBoardContextMenu = useCallback((event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -339,16 +449,6 @@ export default function App() {
     })
     setIsNewBoardMenuOpen(true)
   }, [])
-
-  const syncUri = useMemo(() => {
-    return `${toSyncSocketBase()}/sync/${activeBoard.roomId}`
-  }, [activeBoard.roomId])
-
-  const syncedStore = useSync({
-    uri: syncUri,
-    shapeUtils: syncShapeUtils,
-    bindingUtils: defaultBindingUtils,
-  })
 
   const fitBoardToUsedArea = useCallback(
     ({ preferSelection = false, animate = true, editorInstance } = {}) => {
@@ -382,45 +482,36 @@ export default function App() {
     [editor],
   )
 
-  useEffect(() => {
-    setIsBoardPreparing(true)
-  }, [activeBoard.roomId])
-
   const handleEditorMount = useCallback(
     (nextEditor) => {
       setEditor(nextEditor)
       fitBoardToUsedArea({ preferSelection: false, animate: false, editorInstance: nextEditor })
-
-      window.requestAnimationFrame(() => {
-        setIsBoardPreparing(false)
-      })
     },
     [fitBoardToUsedArea],
   )
 
-  useEffect(() => {
-    if (syncedStore.status !== 'synced-remote') {
-      setIsBoardPreparing(true)
+  const startCreatingBoard = useCallback(() => {
+    setIsPaneCollapsed(false)
+    setIsCreatingBoard(true)
+    setNewBoardName('')
+  }, [])
+
+  const cancelCreatingBoard = () => {
+    setIsCreatingBoard(false)
+    setNewBoardName('')
+  }
+
+  const submitCreateBoard = () => {
+    const name = newBoardName.trim()
+    if (!name) {
+      cancelCreatingBoard()
       return
     }
 
-    const frameId = window.requestAnimationFrame(() => {
-      setIsBoardPreparing(false)
-    })
-
-    return () => {
-      window.cancelAnimationFrame(frameId)
-    }
-  }, [syncedStore.status])
-
-  const handleCreateBoard = () => {
-    const name = window.prompt('Board name')
-    if (!name || !name.trim()) return
-
-    fetch(`${toSyncApiBase()}/api/boards`, {
+    fetch('/api/boards', {
       method: 'POST',
-      headers: withAuthHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ name: name.trim() }),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error('Failed to create board')
@@ -430,38 +521,35 @@ export default function App() {
         setBoards((prev) => [board, ...prev])
         setActiveBoardId(board.id)
         setBoardsError('')
+        cancelCreatingBoard()
       })
       .catch((error) => {
-        window.alert(error.message)
+        showNotice(error.message)
       })
   }
 
-  const handleDeleteBoard = (boardId) => {
-    const board = boards.find((item) => item.id === boardId)
+  const confirmDeleteBoard = () => {
+    const board = pendingDeleteBoard
+    setPendingDeleteBoardId(null)
     if (!board) return
 
-    if (!window.confirm(`Delete "${board.name}"?`)) return
-
-    fetch(`${toSyncApiBase()}/api/boards/${boardId}`, {
-      method: 'DELETE',
-      headers: withAuthHeaders(),
-    })
+    fetch(`/api/boards/${board.id}`, { method: 'DELETE' })
       .then((response) => {
         if (!response.ok && response.status !== 204) {
           throw new Error('Failed to delete board')
         }
 
         setBoards((prev) => {
-          const remaining = prev.filter((item) => item.id !== boardId)
+          const remaining = prev.filter((item) => item.id !== board.id)
           setActiveBoardId((currentId) => {
-            if (currentId !== boardId) return currentId
+            if (currentId !== board.id) return currentId
             return remaining[0]?.id ?? null
           })
           return remaining
         })
       })
       .catch((error) => {
-        window.alert(error.message)
+        showNotice(error.message)
       })
   }
 
@@ -482,7 +570,8 @@ export default function App() {
     const nextName = editingBoardName.trim()
 
     if (!nextName) {
-      window.alert('Board name cannot be empty')
+      showNotice('Board name cannot be empty')
+      cancelRenamingBoard()
       return
     }
 
@@ -493,9 +582,9 @@ export default function App() {
 
     setIsRenamingBoard(true)
 
-    fetch(`${toSyncApiBase()}/api/boards/${board.id}`, {
+    fetch(`/api/boards/${board.id}`, {
       method: 'PATCH',
-      headers: withAuthHeaders({ 'content-type': 'application/json' }),
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: nextName }),
     })
       .then(async (response) => {
@@ -512,7 +601,7 @@ export default function App() {
         cancelRenamingBoard()
       })
       .catch((error) => {
-        window.alert(error.message)
+        showNotice(error.message)
       })
       .finally(() => {
         setIsRenamingBoard(false)
@@ -520,7 +609,7 @@ export default function App() {
   }
 
   const handleDownloadTldr = async () => {
-    if (!editor) return
+    if (!editor || !activeBoard) return
 
     try {
       const json = await serializeTldrawJson(editor)
@@ -532,15 +621,12 @@ export default function App() {
       link.click()
       URL.revokeObjectURL(url)
     } catch {
-      window.alert('Could not export this board as .tldr')
+      showNotice('Could not export this board as .tldr')
     }
   }
 
   const touchBoard = useCallback((boardId) => {
-    return fetch(`${toSyncApiBase()}/api/boards/${boardId}/touch`, {
-      method: 'POST',
-      headers: withAuthHeaders(),
-    })
+    return fetch(`/api/boards/${boardId}/touch`, { method: 'POST' })
       .then(async (response) => {
         if (!response.ok) throw new Error('Failed to update board activity')
         return response.json()
@@ -553,44 +639,32 @@ export default function App() {
       })
   }, [])
 
-  useEffect(() => {
-    if (!editor || !activeBoard.id || syncedStore.status !== 'synced-remote') return undefined
-
-    const unsubscribe = editor.store.listen(() => {
-      const now = Date.now()
-      const { boardId, lastTouchedAt } = boardTouchThrottleRef.current
-
-      if (boardId === activeBoard.id && now - lastTouchedAt < BOARD_TOUCH_THROTTLE_MS) return
-
-      boardTouchThrottleRef.current = { boardId: activeBoard.id, lastTouchedAt: now }
-      touchBoard(activeBoard.id)
-    }, { source: 'user', scope: 'document' })
-
-    return () => {
-      if (typeof unsubscribe === 'function') {
-        unsubscribe()
-      }
-    }
-  }, [activeBoard.id, editor, syncedStore.status, touchBoard])
-
   const importTldrFile = async (file) => {
-    if (!editor) return
-
-    const json = await file.text()
-    const parsed = parseTldrawJsonFile({ json, schema: editor.store.schema })
-    if (!parsed.ok) {
-      window.alert(formatImportError(parsed.error))
+    // Parse against the default schema (plus the markdown shape) — no live
+    // editor is needed, so imports work from the empty state too.
+    let snapshot
+    try {
+      const json = await file.text()
+      const parsed = parseTldrawJsonFile({
+        json,
+        schema: editor?.store.schema ?? getImportSchema(),
+      })
+      if (!parsed.ok) {
+        showNotice(formatImportError(parsed.error))
+        return
+      }
+      snapshot = parsed.value.getStoreSnapshot()
+    } catch {
+      showNotice('Unable to open this .tldr file.')
       return
     }
 
     // Extract board name from filename (remove .tldr extension)
     const boardName = file.name.replace(/\.tldr$/i, '') || 'Imported Board'
-    const snapshot = parsed.value.getStoreSnapshot()
 
-    // Create a new board with the imported content
-    fetch(`${toSyncApiBase()}/api/boards`, {
+    fetch('/api/boards', {
       method: 'POST',
-      headers: withAuthHeaders({ 'content-type': 'application/json' }),
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: boardName, snapshot }),
     })
       .then(async (response) => {
@@ -602,7 +676,7 @@ export default function App() {
         setActiveBoardId(newBoard.id)
       })
       .catch((error) => {
-        window.alert(error.message)
+        showNotice(error.message)
       })
   }
 
@@ -695,11 +769,33 @@ export default function App() {
                     }
                   }}
                   onContextMenu={openNewBoardContextMenu}
-                  onClick={handleCreateBoard}
+                  onClick={startCreatingBoard}
                 >
                   New Board
                 </button>
               </div>
+              {isCreatingBoard ? (
+                <input
+                  type="text"
+                  className="board-name-input new-board-input"
+                  placeholder="Board name"
+                  aria-label="New board name"
+                  value={newBoardName}
+                  onChange={(event) => setNewBoardName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      submitCreateBoard()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      cancelCreatingBoard()
+                    }
+                  }}
+                  onBlur={cancelCreatingBoard}
+                  autoFocus
+                />
+              ) : null}
               <input
                 type="search"
                 className="board-search"
@@ -736,7 +832,7 @@ export default function App() {
 
             <nav className="board-list" aria-label="Boards">
               {filteredBoards.map((board) => (
-                <div key={board.id} className={`board-row ${board.id === activeBoard.id ? 'is-active' : ''}`}>
+                <div key={board.id} className={`board-row ${board.id === activeBoard?.id ? 'is-active' : ''}`}>
                   <div
                     className="board-open"
                     onClick={() => setActiveBoardId(board.id)}
@@ -784,7 +880,7 @@ export default function App() {
                         <span
                           className="board-name"
                           onClick={(event) => {
-                            if (board.id !== activeBoard.id) return
+                            if (board.id !== activeBoard?.id) return
 
                             event.stopPropagation()
                             startRenamingBoard(board)
@@ -799,11 +895,11 @@ export default function App() {
                   <div className="board-actions">
                     <button
                       type="button"
-                      className={`board-download ${board.id === activeBoard.id ? '' : 'is-hidden'}`}
+                      className={`board-download ${board.id === activeBoard?.id ? '' : 'is-hidden'}`}
                       onClick={handleDownloadTldr}
                       aria-label={`Download ${board.name}`}
                       title="Download .tldr"
-                      disabled={board.id !== activeBoard.id}
+                      disabled={board.id !== activeBoard?.id}
                     >
                       <svg viewBox="0 0 16 16" aria-hidden="true">
                         <path
@@ -819,7 +915,7 @@ export default function App() {
                     <button
                       type="button"
                       className="board-delete"
-                      onClick={() => handleDeleteBoard(board.id)}
+                      onClick={() => setPendingDeleteBoardId(board.id)}
                       aria-label={`Delete ${board.name}`}
                     >
                       x
@@ -835,15 +931,15 @@ export default function App() {
       <main className="canvas-pane">
         <header className="canvas-header">
           <div>
-            <h2>{activeBoard.name}</h2>
-            <p>{formatRelativeTime(activeBoard.updatedAt)}</p>
+            <h2>{activeBoard ? activeBoard.name : 'No boards yet'}</h2>
+            <p>{activeBoard ? formatRelativeTime(activeBoard.updatedAt) : 'Create a board to get started'}</p>
           </div>
           <div className="canvas-controls">
             <button
               type="button"
               className="secondary-btn"
               onClick={() => fitBoardToUsedArea({ preferSelection: true })}
-              disabled={!editor}
+              disabled={!editor || !activeBoard}
               title="Fit selection or used area"
             >
               Zoom To Fit
@@ -875,29 +971,59 @@ export default function App() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          {syncedStore.status === 'loading' ? (
-            <div className="status-card">Connecting to sync server...</div>
-          ) : null}
-          {syncedStore.status === 'error' ? (
-            <div className="status-card error">Sync error: {syncedStore.error.message}</div>
-          ) : null}
-          {syncedStore.status === 'synced-remote' ? (
-            <div className={`canvas-editor-shell ${isBoardPreparing ? 'is-preparing' : ''}`}>
-              <Tldraw
-                key={activeBoard.roomId}
-                store={syncedStore.store}
-                onMount={handleEditorMount}
-                shapeUtils={customShapeUtils}
-                tools={customTools}
-                overrides={markdownUiOverrides}
-                components={markdownComponents}
-                assetUrls={markdownAssetUrls}
-              />
+          {activeBoard ? (
+            <BoardCanvas
+              key={activeBoard.roomId}
+              board={activeBoard}
+              editor={editor}
+              onEditorMount={handleEditorMount}
+              touchBoard={touchBoard}
+            />
+          ) : (
+            <div className="empty-state">
+              <p>No boards yet</p>
+              <button type="button" className="secondary-btn" onClick={startCreatingBoard}>
+                Create your first board
+              </button>
             </div>
-          ) : null}
+          )}
           {isTldrDragActive ? <div className="drop-overlay">Drop .tldr file to import</div> : null}
         </section>
       </main>
+
+      {pendingDeleteBoard ? (
+        <div className="modal-backdrop" onClick={() => setPendingDeleteBoardId(null)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Delete ${pendingDeleteBoard.name}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p>
+              Delete <strong>{pendingDeleteBoard.name}</strong>? This removes the board for
+              everyone and cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-btn" onClick={() => setPendingDeleteBoardId(null)} autoFocus>
+                Cancel
+              </button>
+              <button type="button" className="danger-btn" onClick={confirmDeleteBoard}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {notice ? (
+        <div className="toast" role="status">
+          <span>{notice}</span>
+          <button type="button" className="toast-dismiss" aria-label="Dismiss" onClick={() => setNotice('')}>
+            x
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
