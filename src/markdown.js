@@ -13,13 +13,16 @@
 // Without them `_` matches inside identifiers and `board_id and user_name`
 // renders as "board<em>id and user</em>name". CommonMark forbids intraword `_`
 // emphasis for exactly this reason; `*` has no such restriction.
+// The `g` flag is load-bearing: the tokenizer seeks via `lastIndex` instead of
+// slicing the input for every match, which kept re-scanning the whole tail and
+// made long paragraphs quadratic to tokenize.
 const INLINE_RULES = [
-  { type: 'code', re: /`([^`]+?)`/ },
-  { type: 'strong', re: /\*\*([^*]+?)\*\*/ },
-  { type: 'strong', re: /(?<![\w_])__([^_]+?)__(?![\w_])/ },
-  { type: 'link', re: /\[([^\]]+?)\]\(([^)]+?)\)/ },
-  { type: 'em', re: /\*([^*]+?)\*/ },
-  { type: 'em', re: /(?<![\w_])_([^_]+?)_(?![\w_])/ },
+  { type: 'code', re: /`([^`]+?)`/g },
+  { type: 'strong', re: /\*\*([^*]+?)\*\*/g },
+  { type: 'strong', re: /(?<![\w_])__([^_]+?)__(?![\w_])/g },
+  { type: 'link', re: /\[([^\]]+?)\]\(([^)]+?)\)/g },
+  { type: 'em', re: /\*([^*]+?)\*/g },
+  { type: 'em', re: /(?<![\w_])_([^_]+?)_(?![\w_])/g },
 ]
 
 /**
@@ -58,24 +61,40 @@ export function tokenizeInline(text) {
     else nodes.push({ type: 'text', value })
   }
 
+  // Per-rule cache of the next match at or beyond the cursor. A cached match is
+  // still valid after the cursor moves past other rules' matches (the text is
+  // immutable), so each rule scans the input at most once end-to-end instead of
+  // re-scanning the tail after every emitted token. `undefined` = not looked
+  // yet, `null` = no further matches.
+  const nextMatch = new Array(INLINE_RULES.length).fill(undefined)
+
   while (cursor < text.length) {
-    const slice = text.slice(cursor)
     let best = null
 
-    for (const rule of INLINE_RULES) {
-      const match = rule.re.exec(slice)
+    for (let i = 0; i < INLINE_RULES.length; i++) {
+      let match = nextMatch[i]
+
+      if (match === undefined || (match !== null && match.index < cursor)) {
+        const re = INLINE_RULES[i].re
+        re.lastIndex = cursor
+        match = re.exec(text)
+        nextMatch[i] = match
+      }
+
+      // Ties break by rule order (strict <), so `code` still shields its
+      // contents and `**strong**` still beats `*em*` at the same offset.
       if (match && (best === null || match.index < best.match.index)) {
-        best = { rule, match }
+        best = { rule: INLINE_RULES[i], match }
       }
     }
 
     if (!best) {
-      pushText(slice)
+      pushText(text.slice(cursor))
       break
     }
 
     const { rule, match } = best
-    pushText(slice.slice(0, match.index))
+    pushText(text.slice(cursor, match.index))
 
     if (rule.type === 'code') {
       nodes.push({ type: 'code', value: match[1] })
@@ -88,7 +107,7 @@ export function tokenizeInline(text) {
       nodes.push({ type: rule.type, children: tokenizeInline(match[1]) })
     }
 
-    cursor += match.index + match[0].length
+    cursor = match.index + match[0].length
   }
 
   return nodes

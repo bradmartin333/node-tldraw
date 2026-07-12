@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   BaseBoxShapeTool,
   BaseBoxShapeUtil,
@@ -12,7 +12,12 @@ import {
   useValue,
 } from 'tldraw'
 import { MARKDOWN_SHAPE_TYPE, markdownShapeProps } from '../shared/markdownShape.js'
-import { getLanguageLabel, highlightCode } from './highlight.js'
+import {
+  getLanguageLabel,
+  highlightCode,
+  isHighlighterLoaded,
+  loadHighlighter,
+} from './highlight.js'
 import { parseBlocks, tokenizeInline } from './markdown.js'
 
 export { MARKDOWN_SHAPE_TYPE }
@@ -98,7 +103,26 @@ function renderHighlighted(nodes, keyPrefix) {
 }
 
 function CodeBlock({ code, language }) {
-  const { nodes, isHighlighted } = useMemo(() => highlightCode(code, language), [code, language])
+  // Grammars load lazily on the first code block; the block renders as plain
+  // text immediately and re-renders highlighted once they arrive.
+  const [highlighterReady, setHighlighterReady] = useState(isHighlighterLoaded)
+
+  useEffect(() => {
+    if (highlighterReady || !language) return undefined
+
+    let cancelled = false
+    loadHighlighter().then(() => {
+      if (!cancelled) setHighlighterReady(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [highlighterReady, language])
+
+  const { nodes, isHighlighted } = useMemo(
+    () => highlightCode(code, language),
+    [code, language, highlighterReady],
+  )
 
   return (
     <div className="md-code-block">

@@ -887,3 +887,96 @@ body {
 .hljs-strong {
   font-weight: 600;
 }
+
+/* -- New-board inline input, delete modal, toast, empty state ---------------- */
+
+.new-board-input {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  color: var(--ink-soft);
+}
+
+.empty-state-hint {
+  font-size: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 18, 24, 0.45);
+}
+
+.modal {
+  max-width: 360px;
+  padding: 18px;
+  border: 1px solid var(--secondary-btn-border);
+  border-radius: 10px;
+  background: var(--secondary-btn-bg);
+  color: var(--ink);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+
+.modal p {
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-btn {
+  border: 1px solid #c2453d;
+  background: #d8544b;
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  background: #c2453d;
+}
+
+.toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border: 1px solid var(--secondary-btn-border);
+  border-radius: 10px;
+  background: var(--secondary-btn-bg);
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.toast-dismiss {
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}

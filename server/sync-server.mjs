@@ -1,9 +1,14 @@
 // ESM throughout: mixing require() and import() of the tldraw packages loads
 // @tldraw/store, /validate and /tlschema twice (once CJS, once ESM), which
 // tldraw reports as duplicate library instances and which breaks validation.
+//
+// This is the app's only server: it serves the built web app (dist/), the
+// board metadata API, and the sync websocket from one port, so the browser
+// talks to a single same-origin host and no CORS setup is ever needed.
 import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocketServer } from 'ws'
@@ -12,23 +17,16 @@ import { createTLSchema, defaultShapeSchemas } from '@tldraw/tlschema'
 import { MARKDOWN_SHAPE_TYPE, markdownShapeProps } from '../shared/markdownShape.js'
 
 const HOST = '0.0.0.0'
-const PORT = Number(process.env.SYNC_PORT || 8787)
+const PORT = Number(process.env.PORT || 8787)
 const DB_DIR = process.env.SYNC_DB_DIR || '/data'
 const DB_PATH = path.join(DB_DIR, 'tldraw-sync.db')
-const WRITE_TOKEN = String(process.env.SYNC_WRITE_TOKEN || '').trim()
+const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist')
 const BOARD_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
-const DEFAULT_ALLOWED_ORIGINS = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost',
-  'http://127.0.0.1',
-]
-const ALLOWED_ORIGINS = new Set(
-  String(process.env.SYNC_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean),
-)
+const BOARD_ROUTE_PATTERN = /^\/api\/boards\/([^/]+?)(\/touch)?$/
+const MAX_BODY_BYTES = 10 * 1024 * 1024
+// How often to look for rooms with no connected clients. An evicted room's
+// state lives in SQLite, so reopening the board just reloads it.
+const ROOM_SWEEP_INTERVAL_MS = 30 * 1000
 
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true })
@@ -56,58 +54,9 @@ db.exec(`
   )
 `)
 
-function maybeSeedBoards() {
-  const countRow = db.prepare('SELECT COUNT(*) AS count FROM boards').get()
-  if (Number(countRow.count) > 0) return
-
-  const now = Date.now()
-  const seed = [
-    {
-      id: 'b-foundation',
-      name: 'Product Foundation',
-      roomId: 'room-product-foundation',
-      updatedAt: now - 2 * 60 * 1000,
-    },
-    {
-      id: 'b-onboarding',
-      name: 'Onboarding Flows',
-      roomId: 'room-onboarding-flows',
-      updatedAt: now - 19 * 60 * 1000,
-    },
-  ]
-
-  const insert = db.prepare(
-    'INSERT INTO boards (id, name, room_id, updated_at) VALUES (?, ?, ?, ?)',
-  )
-
-  for (const item of seed) {
-    insert.run(item.id, item.name, item.roomId, item.updatedAt)
-  }
-}
-
-function jsonHeaders(origin) {
-  const headers = {
-    'content-type': 'application/json',
-    'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type,authorization',
-    vary: 'Origin',
-  }
-
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
-    headers['access-control-allow-origin'] = origin
-  }
-
-  return headers
-}
-
-function isAllowedOrigin(origin) {
-  if (!origin) return false
-  return ALLOWED_ORIGINS.has(origin)
-}
-
-function hasWriteAccess(req) {
-  if (!WRITE_TOKEN) return true
-  return req.headers.authorization === `Bearer ${WRITE_TOKEN}`
+function jsonResponse(res, status, body) {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(body === undefined ? undefined : JSON.stringify(body))
 }
 
 function isValidBoardId(value) {
@@ -125,20 +74,32 @@ function slugify(value) {
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = ''
+    let settled = false
+
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
     req.on('data', (chunk) => {
       raw += chunk
-      if (raw.length > 10 * 1024 * 1024) {
-        reject(new Error('Request body too large'))
+      if (raw.length > MAX_BODY_BYTES) {
+        fail(new Error('Request body too large'))
+        // Stop buffering the rest of an oversized upload.
+        req.destroy()
       }
     })
     req.on('end', () => {
+      if (settled) return
+      settled = true
       try {
         resolve(raw ? JSON.parse(raw) : {})
       } catch {
         reject(new Error('Invalid JSON'))
       }
     })
-    req.on('error', reject)
+    req.on('error', fail)
   })
 }
 
@@ -151,15 +112,18 @@ function serializeBoard(row) {
   }
 }
 
-maybeSeedBoards()
+function boardExistsForRoom(roomId) {
+  return Boolean(db.prepare('SELECT 1 AS one FROM boards WHERE room_id = ?').get(roomId))
+}
 
+// Only [a-zA-Z0-9_] survives, so interpolating the prefix into DDL below is safe.
 function roomPrefix(roomId) {
   return `r_${roomId.replace(/[^a-zA-Z0-9_]/g, '_')}_`
 }
 
 function loadOrMakeRoom(roomId) {
   const existing = rooms.get(roomId)
-  if (existing) return existing
+  if (existing && !existing.isClosed()) return existing
 
   const sql = new NodeSqliteWrapper(db, { tablePrefix: roomPrefix(roomId) })
   const storage = new SQLiteSyncStorage({ sql })
@@ -169,25 +133,103 @@ function loadOrMakeRoom(roomId) {
   return room
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', 'http://localhost')
-  const origin = req.headers.origin
+// Fully remove a room: disconnect clients, forget it, and drop its SQLite
+// tables (SQLiteSyncStorage creates documents/tombstones/metadata per prefix).
+// Without this, deleted boards leave orphaned tables that grow the DB forever.
+function destroyRoom(roomId) {
+  const room = rooms.get(roomId)
+  if (room && !room.isClosed()) room.close()
+  rooms.delete(roomId)
 
-  if (req.method === 'OPTIONS') {
-    if (!isAllowedOrigin(origin)) {
-      res.writeHead(403, jsonHeaders(origin))
-      res.end()
-      return
+  const prefix = roomPrefix(roomId)
+  for (const table of ['documents', 'tombstones', 'metadata']) {
+    db.exec(`DROP TABLE IF EXISTS ${prefix}${table}`)
+  }
+}
+
+// Rooms whose last client disconnected stay in memory otherwise; on a
+// long-running server that is an unbounded leak.
+const roomSweepInterval = setInterval(() => {
+  for (const [roomId, room] of rooms) {
+    if (room.isClosed()) {
+      rooms.delete(roomId)
+    } else if (room.getNumActiveSessions() === 0) {
+      room.close()
+      rooms.delete(roomId)
     }
+  }
+}, ROOM_SWEEP_INTERVAL_MS)
 
-    res.writeHead(204, jsonHeaders(origin))
-    res.end()
+// -- Static files --------------------------------------------------------------
+
+const STATIC_MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
+  '.wasm': 'application/wasm',
+}
+
+// Vite emits content-hashed filenames like index-BW8kpDzZ.js — those can be
+// cached forever. Everything else (index.html, the mounted logo files) must
+// revalidate so a redeploy or logo swap shows up without a hard refresh.
+const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-z0-9]+$/
+
+function serveStatic(res, pathname) {
+  let filePath = path.normalize(path.join(DIST_DIR, pathname.replace(/^\/+/, '')))
+  if (filePath !== DIST_DIR && !filePath.startsWith(DIST_DIR + path.sep)) {
+    jsonResponse(res, 404, { error: 'Not found' })
     return
   }
 
+  let stats = fs.statSync(filePath, { throwIfNoEntry: false })
+  if (stats?.isDirectory()) {
+    filePath = path.join(filePath, 'index.html')
+    stats = fs.statSync(filePath, { throwIfNoEntry: false })
+  }
+
+  if (!stats?.isFile()) {
+    // SPA fallback: client-side routes like /boards/<id> resolve to the app.
+    filePath = path.join(DIST_DIR, 'index.html')
+    stats = fs.statSync(filePath, { throwIfNoEntry: false })
+    if (!stats?.isFile()) {
+      jsonResponse(res, 404, { error: 'Not found (is dist/ built?)' })
+      return
+    }
+  }
+
+  const ext = path.extname(filePath).toLowerCase()
+  res.writeHead(200, {
+    'content-type': STATIC_MIME[ext] ?? 'application/octet-stream',
+    'content-length': stats.size,
+    'cache-control': HASHED_ASSET_PATTERN.test(filePath)
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache',
+  })
+  fs.createReadStream(filePath).on('error', () => res.destroy()).pipe(res)
+}
+
+// -- HTTP API --------------------------------------------------------------------
+
+function handleRequest(req, res) {
+  const url = new URL(req.url || '/', 'http://localhost')
+
   if (url.pathname === '/health') {
-    res.writeHead(200, jsonHeaders(origin))
-    res.end(JSON.stringify({ ok: true }))
+    try {
+      db.prepare('SELECT 1 AS one').get()
+      jsonResponse(res, 200, { ok: true })
+    } catch {
+      jsonResponse(res, 500, { ok: false })
+    }
     return
   }
 
@@ -195,37 +237,22 @@ const server = http.createServer((req, res) => {
     const rows = db
       .prepare('SELECT id, name, room_id, updated_at FROM boards ORDER BY updated_at DESC')
       .all()
-    res.writeHead(200, jsonHeaders(origin))
-    res.end(JSON.stringify(rows.map(serializeBoard)))
+    jsonResponse(res, 200, rows.map(serializeBoard))
     return
   }
 
   if (url.pathname === '/api/boards' && req.method === 'POST') {
-    if (!isAllowedOrigin(origin)) {
-      res.writeHead(403, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
-      return
-    }
-
-    if (!hasWriteAccess(req)) {
-      res.writeHead(401, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
-    }
-
     readJsonBody(req)
       .then((body) => {
         const name = String(body.name || '').trim()
         if (!name) {
-          res.writeHead(400, jsonHeaders(origin))
-          res.end(JSON.stringify({ error: 'Name is required' }))
+          jsonResponse(res, 400, { error: 'Name is required' })
           return
         }
 
         const snapshot = body.snapshot
         if (snapshot != null && (typeof snapshot !== 'object' || Array.isArray(snapshot))) {
-          res.writeHead(400, jsonHeaders(origin))
-          res.end(JSON.stringify({ error: 'Invalid snapshot payload' }))
+          jsonResponse(res, 400, { error: 'Invalid snapshot payload' })
           return
         }
 
@@ -247,201 +274,202 @@ const server = http.createServer((req, res) => {
             const room = loadOrMakeRoom(roomId)
             room.loadSnapshot(snapshot)
           } catch {
+            // Roll back the half-created board, including any room tables the
+            // failed import left behind.
+            destroyRoom(roomId)
             db.prepare('DELETE FROM boards WHERE id = ?').run(id)
-            res.writeHead(400, jsonHeaders(origin))
-            res.end(JSON.stringify({ error: 'Failed to import board snapshot' }))
+            jsonResponse(res, 400, { error: 'Failed to import board snapshot' })
             return
           }
         }
 
-        res.writeHead(201, jsonHeaders(origin))
-        res.end(
-          JSON.stringify({
-            id,
-            name,
-            roomId,
-            updatedAt,
-          }),
-        )
+        jsonResponse(res, 201, { id, name, roomId, updatedAt })
       })
       .catch((error) => {
-        res.writeHead(400, jsonHeaders(origin))
-        res.end(JSON.stringify({ error: error.message }))
+        jsonResponse(res, 400, { error: error.message })
       })
     return
   }
 
-  if (req.method === 'PATCH' && url.pathname.startsWith('/api/boards/')) {
-    if (!isAllowedOrigin(origin)) {
-      res.writeHead(403, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
-      return
-    }
+  const boardRoute = url.pathname.match(BOARD_ROUTE_PATTERN)
+  if (boardRoute) {
+    const boardId = decodeURIComponent(boardRoute[1])
+    const isTouch = Boolean(boardRoute[2])
 
-    if (!hasWriteAccess(req)) {
-      res.writeHead(401, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
-    }
-
-    const boardId = decodeURIComponent(url.pathname.replace('/api/boards/', ''))
     if (!isValidBoardId(boardId)) {
-      res.writeHead(400, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Invalid board id' }))
+      jsonResponse(res, 400, { error: 'Invalid board id' })
       return
     }
 
-    readJsonBody(req)
-      .then((body) => {
-        const name = String(body.name || '').trim()
-        if (!name) {
-          res.writeHead(400, jsonHeaders(origin))
-          res.end(JSON.stringify({ error: 'Name is required' }))
-          return
-        }
+    if (isTouch && req.method === 'POST') {
+      const updatedAt = Date.now()
+      const result = db
+        .prepare('UPDATE boards SET updated_at = ? WHERE id = ?')
+        .run(updatedAt, boardId)
 
-        const updatedAt = Date.now()
-        const result = db
-          .prepare('UPDATE boards SET name = ?, updated_at = ? WHERE id = ?')
-          .run(name, updatedAt, boardId)
+      if (result.changes === 0) {
+        jsonResponse(res, 404, { error: 'Board not found' })
+        return
+      }
 
-        if (result.changes === 0) {
-          res.writeHead(404, jsonHeaders(origin))
-          res.end(JSON.stringify({ error: 'Board not found' }))
-          return
-        }
+      const updated = db
+        .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
+        .get(boardId)
+      jsonResponse(res, 200, serializeBoard(updated))
+      return
+    }
 
-        const updated = db
-          .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
-          .get(boardId)
+    if (!isTouch && req.method === 'PATCH') {
+      readJsonBody(req)
+        .then((body) => {
+          const name = String(body.name || '').trim()
+          if (!name) {
+            jsonResponse(res, 400, { error: 'Name is required' })
+            return
+          }
 
-        res.writeHead(200, jsonHeaders(origin))
-        res.end(JSON.stringify(serializeBoard(updated)))
-      })
-      .catch((error) => {
-        res.writeHead(400, jsonHeaders(origin))
-        res.end(JSON.stringify({ error: error.message }))
-      })
+          const updatedAt = Date.now()
+          const result = db
+            .prepare('UPDATE boards SET name = ?, updated_at = ? WHERE id = ?')
+            .run(name, updatedAt, boardId)
+
+          if (result.changes === 0) {
+            jsonResponse(res, 404, { error: 'Board not found' })
+            return
+          }
+
+          const updated = db
+            .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
+            .get(boardId)
+          jsonResponse(res, 200, serializeBoard(updated))
+        })
+        .catch((error) => {
+          jsonResponse(res, 400, { error: error.message })
+        })
+      return
+    }
+
+    if (!isTouch && req.method === 'DELETE') {
+      const row = db.prepare('SELECT room_id FROM boards WHERE id = ?').get(boardId)
+      if (!row) {
+        jsonResponse(res, 404, { error: 'Board not found' })
+        return
+      }
+
+      db.prepare('DELETE FROM boards WHERE id = ?').run(boardId)
+      destroyRoom(row.room_id)
+
+      jsonResponse(res, 204)
+      return
+    }
+  }
+
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/sync/')) {
+    jsonResponse(res, 404, { error: 'Not found' })
     return
   }
 
-  if (req.method === 'POST' && url.pathname.startsWith('/api/boards/') && url.pathname.endsWith('/touch')) {
-    if (!isAllowedOrigin(origin)) {
-      res.writeHead(403, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
-      return
-    }
-
-    if (!hasWriteAccess(req)) {
-      res.writeHead(401, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
-    }
-
-    const boardId = decodeURIComponent(url.pathname.replace('/api/boards/', '').replace('/touch', ''))
-    if (!isValidBoardId(boardId)) {
-      res.writeHead(400, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Invalid board id' }))
-      return
-    }
-
-    const updatedAt = Date.now()
-    const result = db
-      .prepare('UPDATE boards SET updated_at = ? WHERE id = ?')
-      .run(updatedAt, boardId)
-
-    if (result.changes === 0) {
-      res.writeHead(404, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Board not found' }))
-      return
-    }
-
-    const updated = db
-      .prepare('SELECT id, name, room_id, updated_at FROM boards WHERE id = ?')
-      .get(boardId)
-
-    res.writeHead(200, jsonHeaders(origin))
-    res.end(JSON.stringify(serializeBoard(updated)))
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    jsonResponse(res, 405, { error: 'Method not allowed' })
     return
   }
 
-  if (req.method === 'DELETE' && url.pathname.startsWith('/api/boards/')) {
-    if (!isAllowedOrigin(origin)) {
-      res.writeHead(403, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Origin is not allowed' }))
-      return
-    }
+  serveStatic(res, decodeURIComponent(url.pathname))
+}
 
-    if (!hasWriteAccess(req)) {
-      res.writeHead(401, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
+const server = http.createServer((req, res) => {
+  try {
+    handleRequest(req, res)
+  } catch (error) {
+    // A handler throw (bad percent-encoding, SQLite error, ...) must not take
+    // the whole process down with it.
+    console.error('Request failed:', error)
+    if (!res.headersSent) {
+      jsonResponse(res, 500, { error: 'Internal server error' })
+    } else {
+      res.end()
     }
-
-    const boardId = decodeURIComponent(url.pathname.replace('/api/boards/', ''))
-    if (!isValidBoardId(boardId)) {
-      res.writeHead(400, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Invalid board id' }))
-      return
-    }
-
-    const result = db.prepare('DELETE FROM boards WHERE id = ?').run(boardId)
-    if (result.changes === 0) {
-      res.writeHead(404, jsonHeaders(origin))
-      res.end(JSON.stringify({ error: 'Board not found' }))
-      return
-    }
-
-    res.writeHead(204, jsonHeaders(origin))
-    res.end()
-    return
   }
-
-  res.writeHead(404, jsonHeaders(origin))
-  res.end(JSON.stringify({ error: 'Not found' }))
 })
 
 const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url || '/', 'http://localhost')
-  const match = url.pathname.match(/^\/sync\/([^/]+)$/)
+  try {
+    const url = new URL(req.url || '/', 'http://localhost')
+    const match = url.pathname.match(/^\/sync\/([^/]+)$/)
 
-  if (!match) {
-    socket.destroy()
-    return
-  }
-
-  const roomId = decodeURIComponent(match[1])
-  const room = loadOrMakeRoom(roomId)
-
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    const sessionId = randomUUID()
-
-    room.handleSocketConnect({
-      sessionId,
-      socket: ws,
-    })
-
-    // TLSocketRoom attaches listeners via addEventListener when available.
-    // For socket implementations without addEventListener, wire events manually.
-    if (typeof ws.addEventListener !== 'function') {
-      ws.on('message', (message) => {
-        room.handleSocketMessage(sessionId, message)
-      })
-
-      ws.on('close', () => {
-        room.handleSocketClose(sessionId)
-      })
-
-      ws.on('error', () => {
-        room.handleSocketError(sessionId)
-      })
+    if (!match) {
+      socket.destroy()
+      return
     }
-  })
+
+    const roomId = decodeURIComponent(match[1])
+
+    // Only rooms that belong to a known board may be opened. Otherwise every
+    // typo'd or stale URL would mint a fresh set of orphaned SQLite tables.
+    if (!boardExistsForRoom(roomId)) {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      // Load the room in the same tick as the session attach: created here, it
+      // has a session before the idle-room sweep can ever observe it empty.
+      const room = loadOrMakeRoom(roomId)
+      const sessionId = randomUUID()
+
+      room.handleSocketConnect({
+        sessionId,
+        socket: ws,
+      })
+
+      // TLSocketRoom attaches listeners via addEventListener when available.
+      // For socket implementations without addEventListener, wire events manually.
+      if (typeof ws.addEventListener !== 'function') {
+        ws.on('message', (message) => {
+          room.handleSocketMessage(sessionId, message)
+        })
+
+        ws.on('close', () => {
+          room.handleSocketClose(sessionId)
+        })
+
+        ws.on('error', () => {
+          room.handleSocketError(sessionId)
+        })
+      }
+    })
+  } catch (error) {
+    console.error('Upgrade failed:', error)
+    socket.destroy()
+  }
 })
 
+let shuttingDown = false
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+
+  clearInterval(roomSweepInterval)
+  server.close()
+  for (const room of rooms.values()) {
+    if (!room.isClosed()) room.close()
+  }
+  rooms.clear()
+  try {
+    db.close()
+  } catch {
+    // Already closed or mid-statement; nothing else to release.
+  }
+  process.exit(0)
+}
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
 server.listen(PORT, HOST, () => {
-  console.log(`tldraw sync server listening on ws://${HOST}:${PORT}`)
+  console.log(`tldraw server listening on http://${HOST}:${PORT}`)
+  console.log(`Serving static files from ${DIST_DIR}`)
   console.log(`SQLite DB: ${DB_PATH}`)
 })

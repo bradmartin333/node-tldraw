@@ -26,6 +26,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Read package version
+        id: pkg
+        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -34,6 +38,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             bradmartin333/node-tldraw:latest
+            bradmartin333/node-tldraw:${{ steps.pkg.outputs.version }}
             bradmartin333/node-tldraw:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

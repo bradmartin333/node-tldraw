@@ -1,33 +1,12 @@
+# Build-from-source compose file (development / self-built deployments).
+# For the prebuilt image, use deploy/docker-compose.yml instead.
 services:
   tldraw:
     build: .
-    container_name: tldraw_app
+    container_name: tldraw
     restart: always
-    depends_on:
-      - sync
-    env_file:
-      - path: .env
-        required: false
     ports:
       - 3000:3000
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
-    deploy:
-      resources:
-        reservations:
-          memory: 128M
-        limits:
-          memory: 256M
-  sync:
-    build: .
-    container_name: tldraw_sync
-    restart: always
-    command: npm run sync-server
-    env_file:
-      - path: .env
-        required: false
-    ports:
-      - 8787:8787
     volumes:
       - tldraw_sync_data:/data
     labels:
@@ -41,4 +20,3 @@ services:
 volumes:
   tldraw_sync_data:
     name: tldraw_sync_data
-networks: {}

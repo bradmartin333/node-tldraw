@@ -1,43 +1,23 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  const rawAllowedHosts =
-    process.env.VITE_ALLOWED_HOSTS ||
-    process.env.VITE_ALLOWED_HOST ||
-    env.VITE_ALLOWED_HOSTS ||
-    env.VITE_ALLOWED_HOST ||
-    ''
-  // Vite matches this against the bare Host header, so an entry like
-  // "http://localhost:3000" never matches and yields a confusing 403. Strip any
-  // protocol and port so a URL-shaped value still does the right thing.
-  const toHostname = (value) =>
-    value
-      .trim()
-      .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
-      .replace(/\/.*$/, '')
-      .replace(/:\d+$/, '')
-
-  const hosts = Array.from(
-    new Set(rawAllowedHosts.split(',').map(toHostname).filter(Boolean)),
-  )
-
-  // "*" disables the host check entirely (Vite's `true`), which is what a
-  // container published on an arbitrary hostname or LAN IP needs.
-  const allowedHosts = hosts.includes('*') ? true : hosts
-
-  return {
-    plugins: [react()],
-    server: {
-      host: '0.0.0.0',
-      port: 3000,
-      allowedHosts,
+// Dev-only server config: in production the sync server serves the built
+// dist/ itself, so the app, API and websocket are all same-origin on one port.
+// In dev the sync server runs standalone on 8787 (`npm run sync-server`) and
+// vite proxies API + websocket traffic to it, so the client code can use the
+// same relative URLs in both environments.
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+    proxy: {
+      '/api': 'http://localhost:8787',
+      '/health': 'http://localhost:8787',
+      '/sync': {
+        target: 'ws://localhost:8787',
+        ws: true,
+      },
     },
-    preview: {
-      host: '0.0.0.0',
-      port: 3000,
-      allowedHosts,
-    },
-  }
+  },
 })
