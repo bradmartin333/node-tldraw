@@ -215,7 +215,7 @@ function serveStatic(res, pathname) {
       ? 'public, max-age=31536000, immutable'
       : 'no-cache',
   })
-  fs.createReadStream(filePath).pipe(res)
+  fs.createReadStream(filePath).on('error', () => res.destroy()).pipe(res)
 }
 
 // -- HTTP API --------------------------------------------------------------------
