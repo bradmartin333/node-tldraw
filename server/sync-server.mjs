@@ -8,9 +8,11 @@
 import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
+import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 import { WebSocketServer } from 'ws'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { createTLSchema, defaultShapeSchemas } from '@tldraw/tlschema'
@@ -21,6 +23,30 @@ const PORT = Number(process.env.PORT || 8787)
 const DB_DIR = process.env.SYNC_DB_DIR || '/data'
 const DB_PATH = path.join(DB_DIR, 'tldraw-sync.db')
 const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist')
+const JSON_PARSE_WORKER_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  './json-parse-worker.mjs',
+)
+// A board import's body can be several MB of base64 image data. Parsing that
+// inline would block the event loop long enough to stall every other board's
+// live sync sessions, so it happens in this worker instead.
+const jsonParseWorker = new Worker(JSON_PARSE_WORKER_PATH)
+const pendingJsonParses = new Map()
+jsonParseWorker.on('message', ({ id, value, error }) => {
+  const pending = pendingJsonParses.get(id)
+  if (!pending) return
+  pendingJsonParses.delete(id)
+  if (error) pending.reject(new Error(error))
+  else pending.resolve(value)
+})
+
+function parseJsonOffThread(raw) {
+  return new Promise((resolve, reject) => {
+    const id = randomUUID()
+    pendingJsonParses.set(id, { resolve, reject })
+    jsonParseWorker.postMessage({ id, raw })
+  })
+}
 const BOARD_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 const BOARD_ROUTE_PATTERN = /^\/api\/boards\/([^/]+?)(\/touch)?$/
 const MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -71,7 +97,7 @@ function slugify(value) {
     .replace(/^-+|-+$/g, '')
 }
 
-function readJsonBody(req) {
+function readRawBody(req) {
   return new Promise((resolve, reject) => {
     let raw = ''
     let settled = false
@@ -93,14 +119,26 @@ function readJsonBody(req) {
     req.on('end', () => {
       if (settled) return
       settled = true
-      try {
-        resolve(raw ? JSON.parse(raw) : {})
-      } catch {
-        reject(new Error('Invalid JSON'))
-      }
+      resolve(raw)
     })
     req.on('error', fail)
   })
+}
+
+function readJsonBody(req) {
+  return readRawBody(req).then((raw) => {
+    try {
+      return raw ? JSON.parse(raw) : {}
+    } catch {
+      throw new Error('Invalid JSON')
+    }
+  })
+}
+
+// Board imports can carry a multi-MB snapshot (embedded images as base64),
+// so this route parses off the main thread instead of via readJsonBody.
+function readJsonBodyOffThread(req) {
+  return readRawBody(req).then((raw) => parseJsonOffThread(raw))
 }
 
 function serializeBoard(row) {
@@ -184,7 +222,31 @@ const STATIC_MIME = {
 // revalidate so a redeploy or logo swap shows up without a hard refresh.
 const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-z0-9]+$/
 
-function serveStatic(res, pathname) {
+// Only text-ish formats compress well; images/fonts here are already
+// compressed and re-compressing them just burns CPU for no size benefit.
+const COMPRESSIBLE_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.map', '.svg', '.txt', '.wasm'])
+
+// Keyed by filePath -> { mtimeMs, brotli, gzip }, so a redeployed dist/ (new
+// mtimes) recompresses instead of serving stale bundles from cache.
+const compressedAssetCache = new Map()
+
+function getCompressedAsset(filePath, stats) {
+  const cached = compressedAssetCache.get(filePath)
+  if (cached && cached.mtimeMs === stats.mtimeMs) return cached
+
+  const raw = fs.readFileSync(filePath)
+  const entry = {
+    mtimeMs: stats.mtimeMs,
+    brotli: zlib.brotliCompressSync(raw, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
+    }),
+    gzip: zlib.gzipSync(raw, { level: 6 }),
+  }
+  compressedAssetCache.set(filePath, entry)
+  return entry
+}
+
+function serveStatic(req, res, pathname) {
   let filePath = path.normalize(path.join(DIST_DIR, pathname.replace(/^\/+/, '')))
   if (filePath !== DIST_DIR && !filePath.startsWith(DIST_DIR + path.sep)) {
     jsonResponse(res, 404, { error: 'Not found' })
@@ -208,12 +270,38 @@ function serveStatic(res, pathname) {
   }
 
   const ext = path.extname(filePath).toLowerCase()
+  const cacheControl = HASHED_ASSET_PATTERN.test(filePath)
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache'
+
+  if (COMPRESSIBLE_EXTENSIONS.has(ext)) {
+    const acceptEncoding = req.headers['accept-encoding'] || ''
+    const encoding = acceptEncoding.includes('br')
+      ? 'br'
+      : acceptEncoding.includes('gzip')
+        ? 'gzip'
+        : null
+
+    if (encoding) {
+      const { brotli, gzip } = getCompressedAsset(filePath, stats)
+      const body = encoding === 'br' ? brotli : gzip
+      res.writeHead(200, {
+        'content-type': STATIC_MIME[ext] ?? 'application/octet-stream',
+        'content-encoding': encoding,
+        'content-length': body.length,
+        'cache-control': cacheControl,
+        vary: 'accept-encoding',
+      })
+      res.end(body)
+      return
+    }
+  }
+
   res.writeHead(200, {
     'content-type': STATIC_MIME[ext] ?? 'application/octet-stream',
     'content-length': stats.size,
-    'cache-control': HASHED_ASSET_PATTERN.test(filePath)
-      ? 'public, max-age=31536000, immutable'
-      : 'no-cache',
+    'cache-control': cacheControl,
+    vary: 'accept-encoding',
   })
   fs.createReadStream(filePath).on('error', () => res.destroy()).pipe(res)
 }
@@ -242,7 +330,7 @@ function handleRequest(req, res) {
   }
 
   if (url.pathname === '/api/boards' && req.method === 'POST') {
-    readJsonBody(req)
+    readJsonBodyOffThread(req)
       .then((body) => {
         const name = String(body.name || '').trim()
         if (!name) {
@@ -374,7 +462,7 @@ function handleRequest(req, res) {
     return
   }
 
-  serveStatic(res, decodeURIComponent(url.pathname))
+  serveStatic(req, res, decodeURIComponent(url.pathname))
 }
 
 const server = http.createServer((req, res) => {
@@ -458,6 +546,7 @@ function shutdown() {
     if (!room.isClosed()) room.close()
   }
   rooms.clear()
+  jsonParseWorker.terminate()
   try {
     db.close()
   } catch {
