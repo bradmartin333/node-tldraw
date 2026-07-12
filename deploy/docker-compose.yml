@@ -16,3 +16,10 @@ services:
 
 volumes:
   tldraw_sync_data:
+
+# Custom logos (See README.md for details)
+# configs:
+#   logo_light:
+#     file: ./logo-light.webp
+#   logo_dark:
+#     file: ./logo-dark.webp

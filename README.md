@@ -22,7 +22,7 @@ cp /path/to/light-logo.webp ./logo-light.webp
 cp /path/to/dark-logo.webp  ./logo-dark.webp
 ```
 
-2. uncomment the `configs` lines in `docker-compose.yml`
+2. uncomment both `configs` blocks in `docker-compose.yml` (the one under `services.tldraw` and the top-level one at the bottom of the file)
 
 ## develop
 
