@@ -185,7 +185,7 @@ const STATIC_MIME = {
 const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-z0-9]+$/
 
 function serveStatic(res, pathname) {
-  let filePath = path.normalize(path.join(DIST_DIR, pathname))
+  let filePath = path.normalize(path.join(DIST_DIR, pathname.replace(/^\/+/, '')))
   if (filePath !== DIST_DIR && !filePath.startsWith(DIST_DIR + path.sep)) {
     jsonResponse(res, 404, { error: 'Not found' })
     return
